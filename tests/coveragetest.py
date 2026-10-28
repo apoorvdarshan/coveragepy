@@ -3,6 +3,8 @@
 
 """Base test case class for coverage.py testing."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 import collections
@@ -16,7 +18,6 @@ import random
 import re
 import shlex
 import sys
-
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import ModuleType
 from typing import Any
@@ -27,11 +28,8 @@ from coverage.cmdline import CoverageScript
 from coverage.data import CoverageData
 from coverage.misc import import_local_file
 from coverage.types import TArc, TLineNo
-
-from tests.helpers import arcz_to_arcs, assert_count_equal
-from tests.helpers import nice_file, run_command
-from tests.mixins import PytestBase, StdStreamCapturingMixin, RestoreModulesMixin, TempDirMixin
-
+from tests.helpers import arcz_to_arcs, assert_count_equal, nice_file, run_command
+from tests.mixins import PytestBase, RestoreModulesMixin, StdStreamCapturingMixin, TempDirMixin
 
 # Status returns for the command line.
 OK, ERR = 0, 1
@@ -479,7 +477,7 @@ class CoverageTest(
     def squeezed_lines(self, report: str) -> list[str]:
         """Return a list of the lines in report, with the spaces squeezed."""
         lines = self.report_lines(report)
-        return [re.sub(r"\s+", " ", l.strip()) for l in lines]
+        return [re.sub(r"\s+", " ", line.strip()) for line in lines]
 
     def last_line_squeezed(self, report: str) -> str:
         """Return the last line of `report` with the spaces squeezed down."""

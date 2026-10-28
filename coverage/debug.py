@@ -98,7 +98,7 @@ class DebugControl:
         if exc is not None:
             self.output.write("".join(traceback.format_exception(None, exc, exc.__traceback__)))
         if self.should("self"):
-            caller_self = inspect.stack()[1][0].f_locals.get("self")
+            caller_self = inspect.stack()[1].frame.f_locals.get("self")
             if caller_self is not None:
                 self.output.write(f"self: {caller_self!r}\n")
         if self.should("callers"):
@@ -150,7 +150,7 @@ def info_formatter(info: Iterable[tuple[str, Any]]) -> Iterable[str]:
     if not info:
         return
     LABEL_LEN = 30
-    assert all(len(l) < LABEL_LEN for l, _ in info)
+    assert all(len(label) < LABEL_LEN for label, _ in info)
     for label, data in info:
         if data == []:
             data = "-none-"
@@ -187,7 +187,7 @@ def write_formatted_info(
 def exc_one_line(exc: Exception) -> str:
     """Get a one-line summary of an exception, including class name and message."""
     lines = traceback.format_exception_only(type(exc), exc)
-    return "|".join(l.rstrip() for l in lines)
+    return "|".join(line.rstrip() for line in lines)
 
 
 _FILENAME_REGEXES: list[tuple[str, str]] = [
@@ -373,15 +373,12 @@ def filter_text(text: str, filters: Iterable[Callable[[str], str]]) -> str:
     run.
 
     """
-    clean_text = text.rstrip()
-    ending = text[len(clean_text) :]
-    text = clean_text
     for filter_fn in filters:
         lines = []
-        for line in text.splitlines():
-            lines.extend(filter_fn(line).splitlines())
-        text = "\n".join(lines)
-    return text + ending
+        for line in text.splitlines(keepends=True):
+            lines.extend(filter_fn(line).splitlines(keepends=True))
+        text = "".join(lines)
+    return text
 
 
 class CwdTracker:

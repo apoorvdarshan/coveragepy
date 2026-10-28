@@ -22,12 +22,12 @@ help:					#- Show this help.
 HAS_UV := $(shell command -v uv 2>/dev/null)
 ifdef HAS_UV
 	# PYVERSIONS
-	VENV := uv venv --python=3.10 --prompt=coverage
+	VENV := uv venv --python=3.11 --prompt=coverage
 	INSTALL := uv pip install
 	INSTALL_R := uv pip sync
 	UNINSTALL := uv pip uninstall
 else
-	VENV := python -m venv .venv
+	VENV := python3.11 -m venv .venv
 	INSTALL := python -m pip install
 	INSTALL_R := python -m pip install -r
 	UNINSTALL := python -m pip uninstall -y
@@ -58,7 +58,7 @@ clean: debug_clean _clean_platform	#- Remove artifacts of test execution, instal
 	@rm -f .tox/*/lib/*/site-packages/a0_metacov.pth
 	@rm -f */.coverage */*/.coverage */*/*/.coverage */*/*/*/.coverage */*/*/*/*/.coverage */*/*/*/*/*/.coverage
 	@rm -f tests/covmain.zip tests/zipmods.zip tests/zip1.zip
-	@rm -rf doc/_build doc/_spell doc/sample_html_beta
+	@rm -rf doc/_build doc/_spell doc/sample_html doc/sample_html_beta
 	@rm -rf tmp
 	@rm -rf a1_coverage.pth
 	@rm -rf .*cache */.*cache */*/.*cache */*/*/.*cache .hypothesis
@@ -75,12 +75,12 @@ venv: .venv				#- Create a virtualenv in .venv.
 	$(VENV)
 
 install: venv				#- Install the developer tools.
-	$(INSTALL_R) requirements/dev.pip
+	$(INSTALL_R) requirements/dev.txt
 
 
 ### Tests and quality checks
 
-.PHONY: lint mypy precommit quality test
+.PHONY: lint mypy precommit quality test test_js
 
 lint:					#- Run linters and checkers.
 	tox -q -e lint
@@ -95,6 +95,9 @@ quality: lint mypy precommit		#- Run all the quality checks.
 
 test:					#- Run the test suite.
 	tox -q -m py
+
+test_js:				#- Run the JavaScript tests in a headless browser.
+	tox -q -e js
 
 ### Metacov: coverage measurement of coverage.py itself
 # See metacov.ini for details.
@@ -112,11 +115,11 @@ metahtml:				#- Produce meta-coverage HTML reports.
 
 # When updating requirements, a few rules to follow:
 #
-# 1) Don't install more than one .pip file at once. Always use pip-compile to
-# combine .in files onto a single .pip file that can be installed where needed.
+# 1) Don't install more than one .txt file at once. Always use pip-compile to
+# combine .in files onto a single .txt file that can be installed where needed.
 #
 # 2) Check manual pins before `make upgrade` to see if they can be removed. Look
-# in requirements/pins.pip, and search for "windows" in .in files to find pins
+# in requirements/pins.txt, and search for "windows" in .in files to find pins
 # and extra requirements that have been needed, but might be obsolete.
 
 .PHONY: upgrade upgrade_one _upgrade diff_upgrade
@@ -135,24 +138,25 @@ PIP_COMPILE = uv pip compile -q --universal --generate-hashes ${COMPILE_OPTS}
 # Limit to packages that were released more than 10 days ago.
 # https://blog.yossarian.net/2025/11/21/We-should-all-be-using-dependency-cooldowns
 upgrade: export UV_EXCLUDE_NEWER=P10D
-upgrade: 				#- Update the *.pip files with the latest packages satisfying *.in files.
+upgrade: 				#- Update the *.txt files with the latest packages satisfying *.in files.
 	$(MAKE) _upgrade COMPILE_OPTS="--upgrade"
 
 # Upgrade just one package, with no cooldown.
-upgrade_one:				#- Update the *.pip files for one package. `make upgrade_one package=...`
+upgrade_one:				#- Update the *.txt files for one package. `make upgrade_one package=...`
 	@test -n "$(package)" || { echo "\nUsage: make upgrade_one package=...\n"; exit 1; }
 	$(MAKE) _upgrade COMPILE_OPTS="--upgrade-package $(package)"
 
 _upgrade: export UV_CUSTOM_COMPILE_COMMAND=make upgrade
 _upgrade: $(DOCBIN) $(KITBIN)
-	$(PIP_COMPILE) -o requirements/pip.pip requirements/pip.in
-	$(PIP_COMPILE) -o requirements/pytest.pip requirements/pytest.in
-	$(PIP_COMPILE) -p $(KITBIN)/python3 -o requirements/kit.pip requirements/kit.in
-	$(PIP_COMPILE) -o requirements/tox.pip requirements/tox.in
-	$(PIP_COMPILE) -o requirements/dev.pip requirements/dev.in
-	$(PIP_COMPILE) -o requirements/light-threads.pip requirements/light-threads.in
-	$(PIP_COMPILE) -o requirements/mypy.pip requirements/mypy.in
-	$(PIP_COMPILE) -p $(DOCBIN)/python3 -o doc/requirements.pip doc/requirements.in
+	$(PIP_COMPILE) -o requirements/pip.txt requirements/pip.in
+	$(PIP_COMPILE) -o requirements/pytest.txt requirements/pytest.in
+	$(PIP_COMPILE) -p $(KITBIN)/python3 -o requirements/kit.txt requirements/kit.in
+	$(PIP_COMPILE) -o requirements/tox.txt requirements/tox.in
+	$(PIP_COMPILE) -o requirements/dev.txt requirements/dev.in
+	$(PIP_COMPILE) -o requirements/light-threads.txt requirements/light-threads.in
+	$(PIP_COMPILE) -o requirements/mypy.txt requirements/mypy.in
+	$(PIP_COMPILE) -o requirements/js.txt requirements/js.in
+	$(PIP_COMPILE) -p $(DOCBIN)/python3 -o doc/requirements.txt doc/requirements.in
 	PYTHONWARNDEFAULTENCODING= pre-commit autoupdate
 
 diff_upgrade:				#- Summarize the last `make upgrade`.
@@ -162,7 +166,7 @@ diff_upgrade:				#- Summarize the last `make upgrade`.
 	@#	+bashlex==0.17
 	@#	-build==0.9.0
 	@#	+build==0.10.0
-	@git diff -U0 | grep -v '^@' | grep == | sort -k1.2,1.99 -k1.1,1.1r -u -V
+	@git diff -U0 $(since) | grep -v '^@' | grep == | sort -k1.2,1.99 -k1.1,1.1r -u -V
 
 
 ### Pre-builds for prepping the code
@@ -208,7 +212,7 @@ sample_html_beta: _sample_cog_html	#- Generate sample HTML report for a beta rel
 
 ### Kitting: making releases
 
-.PHONY: release_version edit_for_release cheats relbranch relcommit1 relcommit2
+.PHONY: release_version edit_for_release cheats relbranch relcommit
 .PHONY: kit pypi_upload test_upload build_kits update_rtd
 .PHONY: _check_github_auth download_kits
 .PHONY: tag bump_version
@@ -228,12 +232,8 @@ cheats:					#- Create some useful snippets for releasing.
 relbranch:				# Create the branch for releasing (see howto.txt).
 	git switch -c nedbat/release-$$(date +%Y%m%d-%H%M%S)
 
-relcommit1:				# Commit the first release changes (see howto.txt).
+relcommit:				# Commit the release changes (see howto.txt).
 	git commit -am "docs: prep for $$(python setup.py --version)"
-
-relcommit2:				# Commit the latest sample HTML report (see howto.txt).
-	git add doc/sample_html
-	git commit -am "docs: sample HTML for $$(python setup.py --version)"
 
 kit:					#- Make a source distribution and some wheels.
 	@# Makes sdist and binary wheel for current Python version and platform:

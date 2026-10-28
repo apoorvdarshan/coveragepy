@@ -3,6 +3,8 @@
 
 """LCOV reporting for coverage.py."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 import base64
@@ -17,6 +19,19 @@ from coverage.types import TMorfs
 
 if TYPE_CHECKING:
     from coverage import Coverage
+
+
+def lcov_field(text: str) -> str:
+    """Make `text` safe to write as a field in a single LCOV record.
+
+    LCOV records are newline-delimited and the format has no escaping, so a
+    value carrying a newline (a legal character in a POSIX file name) would
+    spill into fabricated records. Replace any control characters, which can't
+    appear in a valid one-line field, and leave printable text untouched.
+    """
+    if text.isprintable():
+        return text
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
 
 
 def line_hash(line: str) -> str:
@@ -86,6 +101,7 @@ def lcov_functions(
     functions.sort()
     functions_found = 0
     functions_hit = 0
+    function_names: set[str] = set()
     for first_line, last_line, region in functions:
         # A function counts as having been executed if any of it has been
         # executed.
@@ -97,8 +113,13 @@ def lcov_functions(
         hit = int(analysis.numbers.n_executed > 0)
         functions_hit += hit
 
-        outfile.write(f"FN:{first_line},{last_line},{region.name}\n")
-        outfile.write(f"FNDA:{hit},{region.name}\n")
+        name = lcov_field(region.name)
+        if name in function_names:
+            name += f"@{first_line}"
+        else:
+            function_names.add(name)
+        outfile.write(f"FN:{first_line},{last_line},{name}\n")
+        outfile.write(f"FNDA:{hit},{name}\n")
 
     outfile.write(f"FNF:{functions_found}\n")
     outfile.write(f"FNH:{functions_hit}\n")
@@ -145,7 +166,7 @@ def lcov_arcs(
         destinations.sort(key=lambda d: (d[0] < 0, d))
 
         for dst, hit in destinations:
-            branch = fr.arc_description(line, dst)
+            branch = lcov_field(fr.arc_description(line, dst))
             outfile.write(f"BRDA:{line},0,{branch},{hit}\n")
 
     # Summary of the branch coverage.
@@ -207,7 +228,7 @@ class LcovReporter:
             if self.config.skip_empty:
                 return
 
-        outfile.write(f"SF:{rel_fname}\n")
+        outfile.write(f"SF:{lcov_field(rel_fname)}\n")
 
         lines = sorted(analysis.statements)
         if self.config.lcov_line_checksums:

@@ -23,9 +23,308 @@ upgrading your version of coverage.py.
 Unreleased
 ----------
 
+- Fix: the HTML report only rewrites a file's page when the file or its data
+  has changed, but each page also links to the previous and next files. When
+  the set of reported files changed, unchanged pages kept their old links. For
+  example, with ``skip_covered``, a file that became 100% covered had its page
+  deleted, but the pages next to it still linked to it. Now a page is also
+  rewritten when its neighbors change.
+
+- Fix: ``--fail-under`` now uses at least the decimal precision of the
+  threshold for both the comparison and failure message.  With ``precision=0``,
+  a total of 0.4 now passes ``--fail-under=0.3`` and fails ``--fail-under=0.5``
+  with the message "total of 0.4 is less than fail-under=0.5".  Previously, the
+  comparison rounded the total to zero and the message could claim "1 is less
+  than 0". Closes `issue 2295`_.
+
+- Fix: the HTML report escaped file names twice, so a name with ``&``, ``<``,
+  or quotes in it was shown with entities like ``&amp;``. Now they are properly
+  escaped only once.
+
+- Fix: ``--source=/`` measured no files. A file system root can't be a source
+  directory, so now it is an error. Closes `issue 2291`_.
+
+- In an abundance of caution, prevent forged SQLite journal files from deleting
+  files they shouldn't.
+
+.. _issue 2291: https://github.com/coveragepy/coveragepy/issues/2291
+.. _issue 2295: https://github.com/coveragepy/coveragepy/issues/2295
+
+
+.. start-releases
+
+.. _changes_7-17-0:
+
+Version 7.17.0 — 2026-10-22
+---------------------------
+
+- Dropped support for Python 3.10.
+
+- Binary wheels are now provided for iOS and Android. This allows the use of
+  the optimized C tracer on mobile platforms.
+
+- Fix: three or more levels of nested ``with`` statements could make a ``with``
+  line look like a branch with an exit that can never happen. Using the
+  sys.monitoring core, these phantom branches were reported as partial. Other
+  cores hid the problem but still counted the phantom branches in the total.
+  Closes `issue 1987`_.
+
+- Fix: a comment or string that merely mentioned ``if True:`` or
+  ``while True:`` could mark its line as a branch that is known to be partial,
+  so a branch that never ran was reported as taken.  These built-in patterns
+  now only match at the start of the statement. Closes `issue 2314`_.
+
+- Fix: region detection missed functions defined in unusual places, such as
+  ``else`` and ``except`` clauses. This is now fixed.
+
+- Fix: recent versions of the lcov tool complain if the same function name
+  appears more than once in a report. Python can have multiple same-named
+  functions in a few ways, for example, getters/setters or conditionally
+  defined functions. These are now disambiguated by adding a ``@<line number>``
+  suffix to the function name. Fixes `issue 2335`.
+
+- Fix: The "Can't combine statement coverage data with branch data" error now
+  names the two data files it couldn't combine. The :ref:`error description
+  <error_cant_combine>` in the docs now lists common causes and how to find the
+  process that wrote the file.
+
+- Fix: at coverage totals close to 0 or 100, the XML report could get incorrect
+  ``line-rate`` values like ``8.333e-05`` or ``1``. This is now fixed, closing
+  `issue 2293`_ and `issue 2294`_.
+
+- Fix: a parallel data file saved more than once kept the hash of its first
+  save in its file name. Combining could then skip it as a duplicate of another
+  file that had the same data at that point, and delete it, losing the data
+  recorded after the first save. Each save now updates the hash. This had been
+  a problem since 7.13.1. Fixes `issue 2338`_.
+
+- Fixes for obscure but legal file names:
+
+  - File names (and plugin names) can contain control characters, which are
+    legal in POSIX paths but unsafe in reports: in XML 1.0 they make the
+    document non-well-formed, and in a terminal they act as escape sequences
+    (colors, title/clipboard sequences, cursor moves that forge output). Now
+    the XML report, the text and Markdown summary reports, and ``coverage debug
+    data`` replace non-printable characters in names. Printable names are
+    unchanged.
+
+  - A file pattern (from ``include``, ``omit``, or a ``[paths]`` alias)
+    containing a newline sent the glob-to-regex translation into an infinite
+    loop, hanging the process. Newlines in patterns are now handled like any
+    other character.
+
+- Fixes in the implementation of the C tracer:
+
+  - If a plugin's ``dynamic_source_filename`` method raised an exception, lines
+    in that function could be recorded as belonging to a different file. Also
+    fixed some minor memory leaks in the C tracer.
+
+  - The refcount of ``None`` was mismanaged during function calls, including
+    comprehensions. This was unlikely to cause an actual problem, but is now
+    fixed. Thanks, Andrew Dalke.
+
+  - The C tracer held borrowed references to dictionary values, which was
+    unsafe on free-threaded Python.  Now it takes its own references.
+
+  - An internal error while recording a new file could be reported as a
+    confusing ``SystemError`` instead of the actual exception.
+
+- Performance: the text summary report (``coverage report``) held on to every
+  file's parsed source until it finished, so its memory use grew with the size
+  of the project: ten times or more what 7.14 used on large projects.  Now it
+  keeps only what it needs to print. Fixes `issue 2277`_.
+
+- Performance: HTML reports should be about 5% faster to produce.
+
+- Kept the political banner in the README. Closes `issue 2344`_.
+
+.. _issue 1987: https://github.com/coveragepy/coveragepy/issues/1987
+.. _issue 2277: https://github.com/coveragepy/coveragepy/issues/2277
+.. _issue 2293: https://github.com/coveragepy/coveragepy/issues/2293
+.. _issue 2294: https://github.com/coveragepy/coveragepy/issues/2294
+.. _issue 2314: https://github.com/coveragepy/coveragepy/issues/2314
+.. _issue 2335: https://github.com/coveragepy/coveragepy/issues/2335
+.. _issue 2338: https://github.com/coveragepy/coveragepy/issues/2338
+.. _issue 2344: https://github.com/coveragepy/coveragepy/issues/2344
+
+
+.. _changes_7-16-2:
+
+Version 7.16.2 — 2026-09-27
+---------------------------
+
+- Fix: on Python 3.14 and later, a ``for`` loop completing immediately before a
+  function return could mistakenly report an uncovered branch. This is now
+  fixed, closing `issue 2168`_.
+
+- Fix: on Python 3.14 and later, the ``else`` clause of a ``try`` whose body is
+  a ``with`` statement could incorrectly be reported as covered when the
+  ``with`` raised.  This is now fixed, closing `issue 2289`_.
+
+- Fix: with ``dynamic_context = test_function``, test methods written as
+  ``@staticmethod`` or ``@classmethod`` were not given a context of their own.
+  Now they are, on Python 3.11 and later.  Closes `issue 1923`_.
+
+.. _issue 1923: https://github.com/coveragepy/coveragepy/issues/1923
+.. _issue 2168: https://github.com/coveragepy/coveragepy/issues/2168
+.. _issue 2289: https://github.com/coveragepy/coveragepy/issues/2289
+
+
+.. _changes_7-16-1:
+
+Version 7.16.1 — 2026-09-13
+---------------------------
+
+- Fix: when the body of an irrefutable ``case`` (like ``case _:``) is entirely
+  excluded, the ``case`` line is now excluded too, just as an excluded
+  ``else:`` body removes the ``else:`` line.  Previously the ``case`` line was
+  left behind and reported as missing.  Closes `issue 1563`_ with `pull 2269`_.
+
+- Fix: using :meth:`.CoverageData.update` twice on an in-memory database would
+  fail, as described in `issue 2279`_. This is now fixed.
+
+- Fix: the Total row in the footer of the HTML report's index page was
+  recomputed in JavaScript with rounding that could disagree with the total
+  the server rendered in the heading, including showing ``100%`` when coverage
+  was not complete.  The footer now clamps values the way the rest of the
+  report does, and when nothing is filtered out it is shown exactly as the
+  server rendered it, so the two can't disagree.  That also keeps rows the
+  report omits (``--skip-covered`` drops fully covered files) in the total.
+  Fixes `issue 2256`_.
+
+.. _issue 1563: https://github.com/coveragepy/coveragepy/issues/1563
+.. _issue 2256: https://github.com/coveragepy/coveragepy/issues/2256
+.. _pull 2269: https://github.com/coveragepy/coveragepy/pull/2269
+.. _issue 2279: https://github.com/coveragepy/coveragepy/issues/2279
+
+.. _changes_7-16-0:
+
+Version 7.16.0 — 2026-08-28
+---------------------------
+
+- When combining files, now path separator slashes will automatically be
+  converted to the local file system style. This makes it less necessary to
+  define ``[paths]`` configuration to combine data across operating systems.
+  Fixes `issue 2266`_.
+
+- The :meth:`.Coverage.switch_context` method now returns the previous context.
+
+- Fix: previously, a ``[paths]`` pattern would be replaced everywhere in a file
+  path when it was only meant to be replaced once, in the leading portion of
+  the path. This is now fixed, in `pull 2268`_.
+
+- Fixes to validation of options and configuration settings:
+
+  - Negative precision settings now always cause useful error messages (`pull
+    2261`_).
+
+  - An invalid regex in the ``--contexts`` option (or the ``[report]
+    contexts`` setting) reported a confusing "Couldn't use data file ...:
+    user-defined function raised exception" error. Now it raises a proper
+    configuration error naming the bad regex, like other regex settings do
+    (`pull 2262`_).
+
+  - Non-string values in TOML configuration settings now produce a helpful
+    error message instead of a traceback.  This affects list settings whose
+    elements aren't strings (like ``omit``, ``exclude_lines``, or a ``[paths]``
+    entry), file settings like ``data_file``, and any wrong-typed value in the
+    ``[paths]`` section (`pull 2263`_).
+
+  - ``coverage run`` refuses run-affecting command-line options like
+    ``--branch`` alongside ``--concurrency=multiprocessing``, since they can't
+    reach the subprocesses.  The check only recognized ``multiprocessing`` as
+    the entire option value, so ``--concurrency=multiprocessing,thread``
+    slipped through and failed later with "Can't combine statement coverage
+    data with branch data".  Each named concurrency library is now properly
+    considered (`pull 2270`_).
+
+- Fix: ``coverage annotate -d DIR`` raised an ``AssertionError`` if any
+  measured file had an extension other than ``.py``, such as a ``.pyw`` file on
+  Windows.  The original extension is now restored on the annotated copy (`pull
+  2265`_).
+
+.. _pull 2261: https://github.com/coveragepy/coveragepy/pull/2261
+.. _pull 2262: https://github.com/coveragepy/coveragepy/pull/2262
+.. _pull 2263: https://github.com/coveragepy/coveragepy/pull/2263
+.. _pull 2265: https://github.com/coveragepy/coveragepy/pull/2265
+.. _issue 2266: https://github.com/coveragepy/coveragepy/issues/2266
+.. _pull 2268: https://github.com/coveragepy/coveragepy/pull/2268
+.. _pull 2270: https://github.com/coveragepy/coveragepy/pull/2270
+
+
+.. _changes_7-15-4:
+
+Version 7.15.4 — 2026-08-06
+---------------------------
+
+- Fix: in the HTML report, a source file name containing a double quote (legal
+  on POSIX) wasn't escaped where it's dropped into the ``href`` of the index
+  and prev/next links, so it could close the attribute early and inject markup.
+  Page URLs are now escaped. Thanks, `Rajath Mohare <pull 2227_>`_.
+
+- Fix: the LCOV report wrote file names and other fields into its
+  line-oriented records without neutralizing control characters. A measured
+  file whose name contained a newline (legal on POSIX) could forge extra
+  records, inflating the coverage seen by tools that read the report. Control
+  characters in a field are now replaced. Thanks, `Rajath Mohare <pull
+  2226_>`_.
+
+- Wheels are now provided for Python 3.15.
+
+.. _pull 2226: https://github.com/coveragepy/coveragepy/pull/2226
+.. _pull 2227: https://github.com/coveragepy/coveragepy/pull/2227
+
+
+.. _changes_7-15-3:
+
+Version 7.15.3 — 2026-08-02
+---------------------------
+
+- Fix: the sysmon core is incompatible with dynamic contexts. Previously, the
+  combination would be prevented when read from the coverage.py configuration.
+  But using the context API as pytest-cov does, contexts would be silently
+  dropped. Now a warning is issued, thanks to `Jisang Han <pull 2234_>`_.
+  Closes `issue 2200`_.
+
+- A performance improvement in the low-level line number bookkeeping when
+  combining data files, thanks to `Kevin Turcios <pull 2239_>`_.
+
+- Performance improvement in HTML reporting by reducing the number of times
+  files have to be parsed, thanks to `Kevin Turcios <pull 2240_>`_.
+
+.. _issue 2200: https://github.com/coveragepy/coveragepy/issues/2200
+.. _pull 2234: https://github.com/coveragepy/coveragepy/pull/2234
+.. _pull 2239: https://github.com/coveragepy/coveragepy/pull/2239
+.. _pull 2240: https://github.com/coveragepy/coveragepy/pull/2240
+
+
+.. _changes_7-15-2:
+
+Version 7.15.2 — 2026-07-15
+---------------------------
+
+- Fix: one of the performance improvements in 7.15.1 (pull 2215) dramatically
+  increased memory use during reporting for large projects. Now we use a
+  different approach that is both faster and slimmer than 7.15.0. Fixes `issue
+  2229`_.
+
+.. _issue 2229:  https://github.com/coveragepy/coveragepy/issues/2229
+
+
+.. _changes_7-15-1:
+
+Version 7.15.1 — 2026-07-12
+---------------------------
+
+- Fix: in the HTML report with ``show_contexts`` enabled, a context label
+  containing ``</script>`` (for example a parametrized pytest node id) could
+  close the inline ``<script>`` element in a file page early, injecting markup.
+  Context labels are now fully escaped. Thanks, `Rajath Mohare <pull 2224_>`_.
+
 - A number of performance improvements thanks to Paul Kehrer, in pull requests
   `2213 <pull 2213_>`_, `2214 <pull 2214_>`_, `2215 <pull 2215_>`_, `2216
-  <pull 2216_>`_, and `2218 <pull 2218_>`_.
+  <pull 2216_>`_, `2218 <pull 2218_>`_, `2220 <pull 2220_>`_, and `2221 <pull
+  2221_>`_.
 
 - Fix: a one-line class body immediately followed by another statement (such as
   ``class Foo: ...`` on its own line) was incorrectly reported as a missing
@@ -38,8 +337,9 @@ Unreleased
 .. _pull 2215: https://github.com/coveragepy/coveragepy/pull/2215
 .. _pull 2216: https://github.com/coveragepy/coveragepy/pull/2216
 .. _pull 2218: https://github.com/coveragepy/coveragepy/pull/2218
-
-.. start-releases
+.. _pull 2220: https://github.com/coveragepy/coveragepy/pull/2220
+.. _pull 2221: https://github.com/coveragepy/coveragepy/pull/2221
+.. _pull 2224: https://github.com/coveragepy/coveragepy/pull/2224
 
 .. _changes_7-15-0:
 

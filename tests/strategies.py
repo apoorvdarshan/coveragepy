@@ -3,6 +3,8 @@
 
 """Hypothesis strategies for use in tests."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -84,6 +86,13 @@ nested_data_strategies: S[S[D]] = st.recursive(
     ),
     max_leaves=3,
 )
+
+
+# Use nested_data_strategies to generate data schemas, then use it twice in
+# the test to get two chunks of data with the "same shape" but different
+# data.
+nested_data_pairs = nested_data_strategies.flatmap(lambda s: st.tuples(s, s))
+
 
 if __name__ == "__main__":
     for _ in range(100):

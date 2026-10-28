@@ -2,14 +2,15 @@
 # For details: https://github.com/coveragepy/coveragepy/blob/main/NOTICE.txt
 
 # Requirements input for doing local development work on coverage.py.
-# "make upgrade" turns this into requirements/dev.pip.
+# "make upgrade" turns this into requirements/dev.txt.
 
--c pins.pip
+-c pins.txt
 -r pip.in
 
 # PyPI requirements for running tests.
 -r tox.in
 -r pytest.in
+-r js.in
 
 # for linting.
 actionlint-py
@@ -19,6 +20,7 @@ greenlet
 pylint
 readme_renderer
 ruff
+shellcheck-py
 
 # for kitting.
 libsass

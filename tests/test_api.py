@@ -14,8 +14,8 @@ import re
 import shutil
 import sys
 import textwrap
-
 from collections.abc import Callable, Iterable
+from contextlib import chdir
 from typing import cast
 from unittest import mock
 
@@ -26,15 +26,13 @@ from coverage import Coverage, env
 from coverage.data import line_counts, sorted_lines
 from coverage.exceptions import ConfigError, CoverageException, NoDataError, NoSource
 from coverage.files import abs_file, relative_filename
-from coverage.misc import import_local_file
+from coverage.misc import first, import_local_file
 from coverage.types import FilePathClasses, FilePathType, TCovKwargs
-
 from tests import testenv
-from tests.coveragetest import CoverageTest, TESTS_DIR, UsingModulesMixin
+from tests.coveragetest import TESTS_DIR, CoverageTest, UsingModulesMixin
 from tests.helpers import (
     assert_count_equal,
     assert_coverage_warnings,
-    change_dir,
     get_coverage_warnings,
     nice_file,
     os_sep,
@@ -358,7 +356,7 @@ class ApiTest(CoverageTest):
                 f()
 
             fs = cov.get_data().measured_files()
-            lines.append(cov.get_data().lines(list(fs)[0]))
+            lines.append(cov.get_data().lines(first(fs)))
 
         run_one_function(f1)
         run_one_function(f1)
@@ -484,7 +482,14 @@ class ApiTest(CoverageTest):
 
     @pytest.mark.parametrize(
         "problem, msgpattern",
-        [("badcontent", BAD_SQLITE_REGEX), ("noperms", NO_OPEN_REGEX)],
+        [
+            ("badcontent", BAD_SQLITE_REGEX),
+            pytest.param(
+                "noperms",
+                NO_OPEN_REGEX,
+                marks=pytest.mark.xfail(testenv.ROOT_USER, reason="root can read any file"),
+            ),
+        ],
     )
     def test_combining_bad_data(self, problem: str, msgpattern: str) -> None:
         # If you try to combine a bad data file, then you will get a warning,
@@ -547,6 +552,28 @@ class ApiTest(CoverageTest):
         cov.combine()
         assert self.stdout() == ""
         self.check_code1_code2(cov)
+
+    def test_combining_after_saving_twice(self) -> None:
+        # Two parallel runs measure the same code and save while still running,
+        # then each measures different code and saves again. Combining must
+        # keep both.
+        self.make_code1_code2()
+        self.make_file("code3.py", "code3 = 1\n")
+        for later in ["code2", "code3"]:
+            cov = coverage.Coverage(data_suffix=True)
+            with cov.collect():
+                import_local_file("code1")
+                cov.save()
+                import_local_file(later)
+            cov.save()
+        self.assert_file_count(".coverage.*", 2)
+
+        cov = coverage.Coverage()
+        cov.combine()
+        self.check_code1_code2(cov)
+        _, statements, missing, _ = cov.analysis("code3.py")
+        assert statements == [1]
+        assert missing == []
 
     def test_ordered_combine(self) -> None:
         # https://github.com/coveragepy/coveragepy/issues/649
@@ -735,6 +762,19 @@ class ApiTest(CoverageTest):
             d = dict(cov.sys_info())
         assert cast(str, d["data_file"]).endswith(".coverage")
 
+    @pytest.mark.skipif(not testenv.SYS_MON, reason="Only sysmon drops dynamic contexts.")
+    def test_switch_context_sysmon_warning(self) -> None:
+        cov = coverage.Coverage(config_file=False)
+        with cov.collect():
+            with pytest.warns(Warning) as warns:
+                cov.switch_context("test_a")
+                cov.switch_context("test_b")
+            assert_coverage_warnings(
+                warns,
+                "Dynamic contexts aren't supported with core=sysmon; "
+                + "context data may be incomplete (no-sysmon-context)",
+            )
+
 
 @pytest.mark.skipif(not testenv.DYN_CONTEXTS, reason="No dynamic contexts with this core.")
 class SwitchContextTest(CoverageTest):
@@ -768,11 +808,13 @@ class SwitchContextTest(CoverageTest):
             suite = import_local_file("testsuite")
 
             # Measures test case 1
-            cov.switch_context("multiply_zero")
+            prev = cov.switch_context("multiply_zero")
+            assert prev is None
             suite.test_multiply_zero()
 
             # Measures test case 2
-            cov.switch_context("multiply_six")
+            prev = cov.switch_context("multiply_six")
+            assert prev == "multiply_zero"
             suite.test_multiply_six()
 
             # Runner finishes
@@ -803,11 +845,13 @@ class SwitchContextTest(CoverageTest):
             suite = import_local_file("testsuite")
 
             # Measures test case 1
-            cov.switch_context("multiply_zero")
+            prev = cov.switch_context("multiply_zero")
+            assert prev == "mysuite"
             suite.test_multiply_zero()
 
             # Measures test case 2
-            cov.switch_context("multiply_six")
+            prev = cov.switch_context("multiply_six")
+            assert prev == "mysuite|multiply_zero"
             suite.test_multiply_six()
 
             # Runner finishes
@@ -827,7 +871,7 @@ class SwitchContextTest(CoverageTest):
         assert [2, 5] == sorted_lines(data, suite_filename)
 
     def test_dynamic_context_conflict(self) -> None:
-        cov = coverage.Coverage(source=["."])
+        cov = coverage.Coverage()
         cov.set_option("run:dynamic_context", "test_function")
         with cov.collect():
             with pytest.warns(Warning) as warns:
@@ -1099,6 +1143,16 @@ class SourceIncludeOmitTest(IncludeOmitTestsMixin, CoverageTest):
         ):
             self.coverage_usepkgs_counts(source_dirs=["i-do-not-exist"])
 
+    @pytest.mark.parametrize("src", ["/", "/.."])
+    def test_source_dir_is_file_system_root(self, src: str) -> None:
+        cov = coverage.Coverage(source=[src])
+        with pytest.raises(
+            ConfigError,
+            match=re.escape(f"Source dir can't be a file system root: {src!r}"),
+        ):
+            with cov.collect():
+                pass
+
 
 class ReportIncludeOmitTest(IncludeOmitTestsMixin, CoverageTest):
     """Tests of the report include/omit functionality."""
@@ -1294,7 +1348,7 @@ class RelativePathTest(CoverageTest):
         os.remove("foo.py")
         self.make_file("new/foo.py", "a = 1")
         shutil.move(".coverage", "new/.coverage")
-        with change_dir("new"):
+        with chdir("new"):
             cov = coverage.Coverage()
             cov.load()
             with pytest.raises(NoSource, match=expected):
@@ -1319,7 +1373,7 @@ class RelativePathTest(CoverageTest):
         self.make_file("new/foo.py", "a = 1")
         shutil.move(".coverage", "new/.coverage")
         shutil.move(".coveragerc", "new/.coveragerc")
-        with change_dir("new"):
+        with chdir("new"):
             cov = coverage.Coverage()
             cov.load()
             res = cov.report()
@@ -1354,7 +1408,7 @@ class RelativePathTest(CoverageTest):
             relative_files = true
             """,
         )
-        with change_dir("dir2"):
+        with chdir("dir2"):
             cov = coverage.Coverage(source=["."], data_suffix=True)
             self.start_import_stop(cov, "bar")
             cov.save()

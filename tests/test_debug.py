@@ -10,7 +10,6 @@ import io
 import os
 import re
 import sys
-
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -28,12 +27,11 @@ from coverage.debug import (
     info_formatter,
     info_header,
     relevant_environment_display,
-    short_id,
     short_filename,
+    short_id,
     short_stack,
 )
 from coverage.exceptions import DataError
-
 from tests import testenv
 from tests.coveragetest import CoverageTest
 from tests.helpers import DebugControlString, re_line, re_lines, re_lines_text
@@ -126,8 +124,13 @@ def test_clipped_repr(text: str, numchars: int, result: str) -> None:
         ("hello\nbye\n", [lambda x: "=" + x], "=hello\n=bye\n"),
         (
             "hello\nbye\n",
-            [lambda x: "=" + x, lambda x: x + "\ndone\n"],
+            [lambda x: "=" + x, lambda x: x + "done\n"],
             "=hello\ndone\n=bye\ndone\n",
+        ),
+        (
+            "1\x0b\u3001\n2\x0chello\u2028bye\n",
+            [lambda x: "=" + x],
+            "=1\x0b=\u3001\n=2\x0c=hello\u2028=bye\n",
         ),
     ],
 )
@@ -456,7 +459,7 @@ class ShortFilenameTest(CoverageTest):
         assert short_filename(env.__file__) == f"cov:{s}env.py"
         self.make_file("hello.txt", "hi")
         short_hello = short_filename(os.path.abspath("hello.txt"))
-        assert re.match(rf"tmp:{se}t\d+{se}hello.txt", short_hello)
+        assert re.fullmatch(rf"tmp:{se}t\d+{se}hello.txt", short_hello)
         oddball = f"{s}xyzzy{s}plugh{s}foo.txt"
         assert short_filename(oddball) == oddball
         assert short_filename(None) is None
@@ -508,4 +511,4 @@ def test_auto_repr() -> None:
 
     stuff = MyStuff()
     setattr(stuff, "$coverage.object_id", 123456)
-    assert re.match(r"<MyStuff @0x[a-f\d]+ x=17 y='hello'>", repr(stuff))
+    assert re.fullmatch(r"<MyStuff @0x[a-f\d]+ x=17 y='hello'>", repr(stuff))

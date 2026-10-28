@@ -11,7 +11,6 @@ import pytest
 
 from coverage.exceptions import DataError
 from coverage.sqlitedb import SqliteDb
-
 from tests.coveragetest import CoverageTest
 from tests.helpers import DebugControlString, FailingProxy
 
@@ -75,7 +74,7 @@ class SqliteDbTest(CoverageTest):
 
     def test_open_fails_on_bad_db(self) -> None:
         self.make_file("bad.db", "boogers")
-        msg = "Couldn't use data file 'bad.db': file is not a database"
+        msg = r"Couldn't use data file 'bad.db': file is not a database: \(\S+\)$"
         with pytest.raises(DataError, match=msg):
             with SqliteDb("bad.db", DebugControlString(options=["sql"])):
                 pass  # pragma: not covered

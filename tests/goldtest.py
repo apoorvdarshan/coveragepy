@@ -3,6 +3,8 @@
 
 """A test base class for tests based on gold file comparison."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 import difflib
@@ -12,7 +14,6 @@ import os
 import os.path
 import re
 import xml.etree.ElementTree
-
 from collections.abc import Iterable
 
 from tests.coveragetest import TESTS_DIR

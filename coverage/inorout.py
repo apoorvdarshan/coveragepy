@@ -222,11 +222,13 @@ class InOrOut:
                 self.source_pkgs.append(src)
 
         # Canonicalize everything in `source_dirs`.
-        # Also confirm that they actually are directories.
+        # Also confirm that they actually are directories, and not a file system root.
         for i, src in enumerate(self.source_dirs):
             if not os.path.isdir(src):
                 raise ConfigError(f"Source dir is not a directory: {src!r}")
             self.source_dirs[i] = canonical_filename(src)
+            if os.path.dirname(self.source_dirs[i]) == self.source_dirs[i]:
+                raise ConfigError(f"Source dir can't be a file system root: {src!r}")
 
         self.source_pkgs_unmatched = self.source_pkgs[:]
 
@@ -539,10 +541,7 @@ class InOrOut:
                     warned.add(filename)
                 elif self.debug and self.debug.should("trace"):
                     self.debug.write(
-                        "Didn't trace already imported file {!r}: {}".format(
-                            disp.original_filename,
-                            disp.reason,
-                        ),
+                        f"Didn't trace already imported file {disp.original_filename!r}: {disp.reason}",
                     )
 
     def warn_unimported_source(self) -> None:

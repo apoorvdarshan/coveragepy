@@ -6,11 +6,15 @@
 from __future__ import annotations
 
 import math
+import os
 import textwrap
 
-import coverage
+import pytest
 
+import coverage
+from coverage import env
 from tests.coveragetest import CoverageTest
+from tests.helpers import re_lines_text
 
 
 class LcovTest(CoverageTest):
@@ -82,7 +86,7 @@ class LcovTest(CoverageTest):
             end_of_record
             """)
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(source=["."])
+        cov = coverage.Coverage()
         self.start_import_stop(cov, "main_file")
         pct = cov.lcov_report()
         assert pct == 50.0
@@ -102,7 +106,7 @@ class LcovTest(CoverageTest):
         )
         self.make_file(".coveragerc", "[lcov]\nline_checksums = true\n")
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(source=["."])
+        cov = coverage.Coverage()
         self.start_import_stop(cov, "main_file")
         pct = cov.lcov_report()
         assert pct == 50.0
@@ -125,13 +129,34 @@ class LcovTest(CoverageTest):
         actual_result = self.get_lcov_report_content()
         assert expected_result == actual_result
 
+    @pytest.mark.skipif(env.WINDOWS, reason="Newlines are disallowed in Windows filenames.")
+    def test_newline_in_filename_does_not_inject_records(self) -> None:
+        # A POSIX file name may contain a newline. Written verbatim into the
+        # line-oriented LCOV format it would forge extra records (a fake file,
+        # inflated hit counts), so control characters in a field are replaced.
+        evil = "a\nLH:9999\nSF:injected.py\nend_of_record\nreal.py"
+        self.make_file(evil, "a = 1\nb = 2\n")
+        self.make_data_file(lines={os.path.abspath(evil): [1, 2]})
+        cov = coverage.Coverage()
+        cov.load()
+        cov.lcov_report()
+        expected_result = textwrap.dedent("""\
+            SF:a?LH:9999?SF:injected.py?end_of_record?real.py
+            DA:1,1
+            DA:2,1
+            LF:2
+            LH:2
+            end_of_record
+            """)
+        assert expected_result == self.get_lcov_report_content()
+
     def test_simple_line_coverage_two_files(self) -> None:
         # Test that line coverage is created when coverage is run,
         # and matches the output of the file below.
         self.create_initial_files()
         self.assert_doesnt_exist(".coverage")
         self.make_file(".coveragerc", "[lcov]\noutput = data.lcov\n")
-        cov = coverage.Coverage(source=".")
+        cov = coverage.Coverage()
         self.start_import_stop(cov, "test_file")
         pct = cov.lcov_report()
         assert pct == 50.0
@@ -184,7 +209,7 @@ class LcovTest(CoverageTest):
             """,
         )
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(branch=True, source=".")
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "main_file")
         pct = cov.lcov_report()
         assert math.isclose(pct, 16.666666666666668)
@@ -237,7 +262,7 @@ class LcovTest(CoverageTest):
             """,
         )
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(branch=True, source=".")
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "test_file")
         pct = cov.lcov_report()
         assert math.isclose(pct, 41.666666666666664)
@@ -292,7 +317,7 @@ class LcovTest(CoverageTest):
             """,
         )
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(branch=True, source=".")
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "main_file")
         pct = cov.lcov_report()
         assert math.isclose(pct, 66.66666666666667)
@@ -319,7 +344,7 @@ class LcovTest(CoverageTest):
         # coverage record.
         self.make_file("__init__.py", "")
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(branch=True, source=".")
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "__init__")
         pct = cov.lcov_report()
         assert pct == 0.0
@@ -338,7 +363,7 @@ class LcovTest(CoverageTest):
         self.make_file("__init__.py", "")
         self.make_file(".coveragerc", "[report]\nskip_empty = True\n")
         self.assert_doesnt_exist(".coverage")
-        cov = coverage.Coverage(branch=True, source=".")
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "__init__")
         pct = cov.lcov_report()
         assert pct == 0.0
@@ -368,7 +393,7 @@ class LcovTest(CoverageTest):
             # line 8
             """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -419,7 +444,7 @@ class LcovTest(CoverageTest):
             assert Concrete().excluded_abstract() == 2
             """,
         )
-        cov = coverage.Coverage(source=".")
+        cov = coverage.Coverage()
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -466,7 +491,7 @@ class LcovTest(CoverageTest):
             assert x == 1
             """,
         )
-        cov = coverage.Coverage(source=".")
+        cov = coverage.Coverage()
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -496,7 +521,7 @@ class LcovTest(CoverageTest):
             foo([0])
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -536,7 +561,7 @@ class LcovTest(CoverageTest):
             foo([0,-1])
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -574,7 +599,7 @@ class LcovTest(CoverageTest):
             foo([0])
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -610,7 +635,7 @@ class LcovTest(CoverageTest):
             foo([1,2])
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -644,7 +669,7 @@ class LcovTest(CoverageTest):
                     print(f"{a!r} has positives")
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "runme")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -680,7 +705,7 @@ class LcovTest(CoverageTest):
                 pass
         """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "always_raise")
         cov.lcov_report()
         expected_result = textwrap.dedent("""\
@@ -713,7 +738,7 @@ class LcovTest(CoverageTest):
                     print("got here")
             """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "multi")
         cov.lcov_report()
         lcov = self.get_lcov_report_content()
@@ -731,9 +756,55 @@ class LcovTest(CoverageTest):
                 foo()
             """,
         )
-        cov = coverage.Coverage(source=".", branch=True)
+        cov = coverage.Coverage(branch=True)
         self.start_import_stop(cov, "modexit")
         cov.lcov_report()
         lcov = self.get_lcov_report_content()
-        print(lcov)
         assert "BRDA:5,0,exit the module,1" in lcov
+
+    def test_no_duplicate_names(self) -> None:
+        # Multiple functions can have the same name, but newer lcov versions
+        # don't allow duplicated names.
+        self.make_file(
+            "getter_setter.py",
+            """\
+            class C:
+                @property
+                def x(self):
+                    return 4
+
+                @x.setter
+                def x(self, value):
+                    pass
+
+            c = C()
+            c.x = c.x
+
+            for i in range(2):
+                if i:
+                    def maybe():
+                        return 16
+                    maybe()
+                else:
+                    def maybe():
+                        return 20
+                    maybe()
+            """,
+        )
+        cov = coverage.Coverage()
+        self.start_import_stop(cov, "getter_setter")
+        cov.lcov_report()
+        expected_result = textwrap.dedent("""\
+            FN:3,4,C.x
+            FNDA:1,C.x
+            FN:7,8,C.x@7
+            FNDA:1,C.x@7
+            FN:15,16,maybe
+            FNDA:1,maybe
+            FN:19,20,maybe@19
+            FNDA:1,maybe@19
+            FNF:4
+            FNH:4
+            """)
+        actual_result = re_lines_text("^FN", self.get_lcov_report_content())
+        assert expected_result == actual_result

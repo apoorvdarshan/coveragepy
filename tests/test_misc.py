@@ -10,16 +10,19 @@ from typing import Any
 from unittest import mock
 
 import pytest
-from hypothesis import example, given, strategies as st
 
 from coverage.exceptions import CoverageException
-from coverage.misc import file_be_gone
-from coverage.misc import Hasher, substitute_variables, import_third_party
-from coverage.misc import human_sorted, human_sorted_items, stdout_link
-
+from coverage.misc import (
+    Hasher,
+    file_be_gone,
+    human_sorted,
+    human_sorted_items,
+    stdout_link,
+    substitute_variables,
+)
+from tests import testenv
 from tests.coveragetest import CoverageTest
-from tests.strategies import nested_data_strategies
-
+from tests.hypo import given
 
 # Make two sets which are equal but iterate differently.
 numset1 = set(range(20))
@@ -39,24 +42,37 @@ class HasherTest(CoverageTest):
         assert numset1 == numset2
         assert list(numset1) != list(numset2)
 
-    # Use nested_data_strategies to generate data schemas, then use it twice in
-    # the test to get two chunks of data with the "same shape" but different
-    # data.
-    @example(([1, None, 2, None], [1, 2]))
-    @example(("Hello, world!", "Hello, world!"))
-    @example(("Hello", "Goodbye"))
-    @example((b"Hello", b"Goodbye"))
-    @example(("Hello \N{SNOWMAN}", "Goodbye"))
-    @example(({"a": 17, "b": 23}, {"b": 23, "a": 17}))
-    @example(({"a": 17, "b": {"c": 1, "d": 2}}, {"a": 17, "b": {"c": 1}, "d": 2}))
-    @example((numset1, numset2))
-    @example(({(1, 2), (3, 4), (5, 6)}, {(1, 2)}))
-    # https://github.com/coveragepy/coveragepy/issues/2108
-    @example((["", []], [".<class 'list'>"]))
-    @example((["5", []], [".<class 'list'>"]))
-    @given(nested_data_strategies.flatmap(lambda s: st.tuples(s, s)))
-    def test_equality_matches_hash(self, data_pair: tuple[Any, Any]) -> None:
-        data1, data2 = data_pair
+    @pytest.mark.parametrize(
+        "data1, data2",
+        [
+            ([1, None, 2, None], [1, 2]),
+            ("Hello, world!", "Hello, world!"),
+            ("Hello", "Goodbye"),
+            pytest.param(b"Hello", b"Goodbye", id="Hello2"),
+            ("Hello \N{SNOWMAN}", "Goodbye"),
+            ({"a": 17, "b": 23}, {"b": 23, "a": 17}),
+            ({"a": 17, "b": {"c": 1, "d": 2}}, {"a": 17, "b": {"c": 1}, "d": 2}),
+            (numset1, numset2),
+            ({(1, 2), (3, 4), (5, 6)}, {(1, 2)}),
+            # https://github.com/coveragepy/coveragepy/issues/2108
+            (["", []], [".<class 'list'>"]),
+            (["5", []], [".<class 'list'>"]),
+        ],
+    )
+    def test_equality_matches_hash(self, data1: Any, data2: Any) -> None:
+        self.check_equality_matches_hash(data1, data2)
+
+    if testenv.USE_HYPOTHESIS:
+        from tests.strategies import nested_data_pairs
+    else:
+        nested_data_pairs = None  # type: ignore[assignment]
+
+    @given(nested_data_pairs)
+    def test_equality_matches_hash_hypo(self, data_pair: tuple[Any, Any]) -> None:
+        self.check_equality_matches_hash(*data_pair)
+
+    def check_equality_matches_hash(self, data1: Any, data2: Any) -> None:
+        """Do the work for a few hash test methods."""
         h1 = Hasher()
         h1.update(data1)
         h2 = Hasher()
@@ -127,30 +143,6 @@ def test_substitute_variables_errors(text: str) -> None:
         substitute_variables(text, VARS)
     assert text in str(exc_info.value)
     assert "Variable NOTHING is undefined" in str(exc_info.value)
-
-
-class ImportThirdPartyTest(CoverageTest):
-    """Test import_third_party."""
-
-    run_in_temp_dir = False
-
-    def test_success(self) -> None:
-        # Make sure we don't have pytest in sys.modules before we start.
-        del sys.modules["pytest"]
-        # Import pytest
-        mod, has = import_third_party("pytest")
-        assert has
-        # Yes, it's really pytest:
-        assert mod.__name__ == "pytest"
-        print(dir(mod))
-        assert all(hasattr(mod, name) for name in ["skip", "mark", "raises", "warns"])
-        # But it's not in sys.modules:
-        assert "pytest" not in sys.modules
-
-    def test_failure(self) -> None:
-        _, has = import_third_party("xyzzy")
-        assert not has
-        assert "xyzzy" not in sys.modules
 
 
 HUMAN_DATA = [

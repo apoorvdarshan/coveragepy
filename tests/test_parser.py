@@ -8,14 +8,15 @@ from __future__ import annotations
 import ast
 import re
 import textwrap
+import tokenize
 from unittest import mock
 
 import pytest
 
 from coverage import env
 from coverage.exceptions import NoSource, NotPython
-from coverage.parser import PythonParser, is_constant_test_expr
-
+from coverage.parser import PythonParser, is_constant_test_expr, multiline_map_from_text
+from coverage.types import TLineNo
 from tests.coveragetest import CoverageTest
 from tests.helpers import arcz_to_arcs
 
@@ -178,6 +179,25 @@ class PythonParserTest(PythonParserTestBase):
 
         one_nine = set(range(1, 10))
         assert parser.statements == one_nine
+        assert parser.exit_counts() == dict.fromkeys(one_nine, 1)
+
+    def test_deeply_nested_context_managers(self) -> None:
+        # https://github.com/coveragepy/coveragepy/issues/1987
+        parser = self.parse_text("""\
+            a = 1
+            with suppress(ValueError):
+                with suppress(ValueError):
+                    with suppress(ValueError):
+                        with suppress(ValueError):
+                            x = 6
+                    with suppress(ValueError): x = 7
+            with suppress(ValueError): x = 8
+            a = 9
+            """)
+
+        one_nine = set(range(1, 10))
+        assert parser.statements == one_nine
+        assert parser.arcs() == set(arcz_to_arcs("12 23 34 45 56 67 78 89 9."))
         assert parser.exit_counts() == dict.fromkeys(one_nine, 1)
 
     def test_module_docstrings(self) -> None:
@@ -1094,6 +1114,69 @@ class ExclusionParserTest(PythonParserTestBase):
         assert parser.raw_statements == {1, 3, 4, 5, 6, 8, 9}
         assert parser.statements == {1}
 
+    def test_exclude_irrefutable_case_with_excluded_body(self) -> None:
+        # https://github.com/coveragepy/coveragepy/issues/1563
+        # An irrefutable `case` (`case _:` or a bare capture) is the `match`
+        # equivalent of an `else:` clause.  When its whole body is excluded,
+        # the `case` line is excluded too.  A refutable case is left alone,
+        # the same way an `elif` line is still reported.
+        regex = "raise NotImplementedError"
+        parser = self.parse_text(
+            """\
+            match command:
+                case "go":
+                    move()
+                case "stop":
+                    raise NotImplementedError
+                case _:
+                    raise NotImplementedError
+            """,
+            regex,
+        )
+        assert parser.lines_matching(regex) == {5, 7}
+        assert parser.raw_statements == {1, 2, 3, 4, 5, 6, 7}
+        # Line 6 (`case _:`) is excluded with its body.  The refutable
+        # `case "stop":` on line 4 is still reported, like an `elif`.
+        assert parser.statements == {1, 2, 3, 4}
+
+    def test_exclude_capture_case_with_excluded_body(self) -> None:
+        # https://github.com/coveragepy/coveragepy/issues/1563
+        # A bare-capture pattern (`case other:`) is also irrefutable.
+        regex = "# nope"
+        parser = self.parse_text(
+            """\
+            match command:
+                case "go":
+                    move()
+                case other:
+                    log(other)   # nope
+            """,
+            regex,
+        )
+        assert parser.lines_matching(regex) == {5}
+        assert parser.raw_statements == {1, 2, 3, 4, 5}
+        assert parser.statements == {1, 2, 3}
+
+    def test_no_exclude_case_with_partly_excluded_body(self) -> None:
+        # https://github.com/coveragepy/coveragepy/issues/1563
+        # The `case` line is only excluded when its entire body is excluded.
+        regex = "# nope"
+        parser = self.parse_text(
+            """\
+            match command:
+                case "go":
+                    move()
+                case _:
+                    keep_me()
+                    skip_me()   # nope
+            """,
+            regex,
+        )
+        assert parser.lines_matching(regex) == {6}
+        assert parser.raw_statements == {1, 2, 3, 4, 5, 6}
+        # `case _:` (line 4) stays reported: line 5 in its body is not excluded.
+        assert parser.statements == {1, 2, 3, 4, 5}
+
 
 class ParserMissingArcDescriptionTest(PythonParserTestBase):
     """Tests for PythonParser.missing_arc_description."""
@@ -1320,3 +1403,170 @@ def test_is_constant_test_expr(expr: str, ret: tuple[bool, bool]) -> None:
     node = ast.parse(expr, mode="eval").body
     print(ast.dump(node, indent=4))
     assert is_constant_test_expr(node) == ret
+
+
+class MultilineMapTest(CoverageTest):
+    """Tests of multiline_map_from_text."""
+
+    run_in_temp_dir = False
+
+    def multiline_map(self, text: str) -> dict[TLineNo, TLineNo]:
+        """Compute the multiline map of dedented `text`."""
+        return multiline_map_from_text(textwrap.dedent(text))
+
+    def test_single_line_statements_have_no_entries(self) -> None:
+        assert (
+            self.multiline_map("""\
+                a = 1
+                b = 2; c = 3
+                # a comment
+
+                def f(x):
+                    return x
+                """)
+            == {}
+        )
+
+    def test_parenthesized_expression(self) -> None:
+        assert self.multiline_map("""\
+            x = (
+                1 +
+                2
+            )
+            y = 5
+            """) == {1: 1, 2: 1, 3: 1, 4: 1}
+
+    def test_backslash_continuation(self) -> None:
+        assert self.multiline_map("""\
+            total = 1 + \\
+                2
+            """) == {1: 1, 2: 1}
+
+    def test_triple_quoted_string(self) -> None:
+        assert self.multiline_map("""\
+            s = '''one
+            two
+            three'''
+            """) == {1: 1, 2: 1, 3: 1}
+
+    def test_multiline_signature(self) -> None:
+        assert self.multiline_map("""\
+            def f(
+                a,
+                b,
+            ):
+                return a + b
+            """) == {1: 1, 2: 1, 3: 1, 4: 1}
+
+    def test_multiline_if_header(self) -> None:
+        assert self.multiline_map("""\
+            if (a and
+                    b):
+                c = 1
+            """) == {1: 1, 2: 1}
+
+    def test_blank_and_comment_lines_inside_statement(self) -> None:
+        # Lines inside a multi-line statement belong to it, even blank lines
+        # and comment lines.
+        assert self.multiline_map("""\
+            x = [
+                1,
+
+                # two comes next
+                2,
+            ]
+            """) == {lineno: 1 for lineno in range(1, 7)}
+
+    def test_statements_map_to_their_own_starts(self) -> None:
+        assert self.multiline_map("""\
+            a = (1 +
+                2)
+            b = 3
+            c = (4 +
+                5)
+            """) == {1: 1, 2: 1, 4: 4, 5: 4}
+
+    def test_unparsable_text_raises(self) -> None:
+        with pytest.raises(tokenize.TokenError):
+            multiline_map_from_text("x = (\n")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            """\
+                a = 1
+                b = 2
+                """,
+            """\
+                x = (
+                    1 +
+                    2
+                )
+                y = 5
+                """,
+            """\
+                def f(
+                    a,
+                    b=[1,
+                        2],
+                ):
+                    return (a +
+                        b)
+                """,
+            """\
+                @decorator(
+                    arg,
+                )
+                def f():
+                    pass
+                """,
+            """\
+                if (a and
+                        b):
+                    c = (1,
+                        2)
+                """,
+            """\
+                with (open('a') as fa,
+                        open('b') as fb):
+                    pass
+                """,
+            """\
+                s = f'''one {x
+                    + 1} two
+                three'''
+                t = 4
+                """,
+            """\
+                class C(
+                    Base,
+                ):
+                    attr = 1
+                """,
+            """\
+                result = [x
+                    for x in items
+                    if x > 0
+                ]
+                """,
+            """\
+                match (command,
+                        arg):
+                    case (1, 2):
+                        pass
+                """,
+            """\
+                total = 1 + \\
+                    2 + \\
+                    3
+                """,
+        ],
+    )
+    def test_agrees_with_python_parser(self, text: str) -> None:
+        # PythonParser._raw_parse gets its multiline map from the same code,
+        # but through a different path (tokenizing to a list first).  The two
+        # must never drift apart: the sys.monitoring core uses this map to
+        # attribute branch arcs to the lines that reports are keyed by.
+        parser = PythonParser(text=textwrap.dedent(text))
+        parser.parse_source()
+        assert multiline_map_from_text(text) == parser.multiline_map

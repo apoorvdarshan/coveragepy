@@ -24,9 +24,9 @@ from coverage.control import DEFAULT_DATAFILE
 from coverage.core import CTRACER_FILE
 from coverage.data import CoverageData, combinable_files, debug_data_file
 from coverage.debug import info_header, short_stack, write_formatted_info
-from coverage.exceptions import NoSource, CoverageException, _ExceptionDuringRun
+from coverage.exceptions import CoverageException, NoSource, _ExceptionDuringRun
 from coverage.execfile import PyRunner
-from coverage.results import display_covered, should_fail_under
+from coverage.results import format_fail_under_msg, should_fail_under
 from coverage.version import __url__
 
 # When adding to this file, alphabetization is important.  Look for
@@ -432,8 +432,6 @@ class CoverageOptionParser(optparse.OptionParser):
     class OptionParserError(Exception):
         """Used to stop the optparse error handler ending the process."""
 
-        pass
-
     def parse_args_ok(self, args: list[str]) -> tuple[bool, optparse.Values | None, list[str]]:
         """Call optparse.parse_args, but return a triple:
 
@@ -753,8 +751,7 @@ def show_help(
         # coverage-3.5-script.py.  argv[0] is the .py file, but we want to
         # get back to the original form.
         auto_suffix = "-script.py"
-        if program_name.endswith(auto_suffix):
-            program_name = program_name[: -len(auto_suffix)]
+        program_name = program_name.removesuffix(auto_suffix)
 
     help_params = dict(coverage.__dict__)
     help_params["__url__"] = __url__
@@ -945,12 +942,7 @@ class CoverageScript:
             fail_under = cast(float, self.coverage.get_option("report:fail_under"))
             precision = cast(int, self.coverage.get_option("report:precision"))
             if should_fail_under(total, fail_under, precision):
-                msg = "total of {total} is less than fail-under={fail_under:.{p}f}".format(
-                    total=display_covered(total, precision),
-                    fail_under=fail_under,
-                    p=precision,
-                )
-                print("Coverage failure:", msg)
+                print("Coverage failure:", format_fail_under_msg(total, fail_under, precision))
                 return FAIL_UNDER
 
         return OK
@@ -1020,7 +1012,7 @@ class CoverageScript:
             show_help("Can't append to data files in parallel mode.")
             return ERR
 
-        if options.concurrency == "multiprocessing":
+        if "multiprocessing" in (options.concurrency or "").split(","):
             # Can't set other run-affecting command line options with
             # multiprocessing.
             for opt_name in ["branch", "include", "omit", "pylib", "source", "timid"]:
@@ -1179,7 +1171,7 @@ def main(argv: list[str] | None = None) -> int | None:
         # An exception was caught while running the product code.  The
         # sys.exc_info() return tuple is packed into an _ExceptionDuringRun
         # exception.
-        traceback.print_exception(*err.args)  # pylint: disable=no-value-for-parameter
+        traceback.print_exception(*err.args)
         status = ERR
     except CoverageException as err:
         # A controlled error inside coverage.py: print the message to the user.

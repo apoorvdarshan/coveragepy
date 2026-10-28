@@ -18,7 +18,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from types import FrameType
-from typing import IO, Any, cast
+from typing import IO, Any, ClassVar, cast
 
 from coverage import env
 from coverage.annotate import AnnotateReporter
@@ -123,7 +123,7 @@ class Coverage(TConfigurable):
     """
 
     # The stack of started Coverage instances.
-    _instances: list[Coverage] = []
+    _instances: ClassVar[list[Coverage]] = []
 
     @classmethod
     def current(cls) -> Coverage | None:
@@ -131,7 +131,7 @@ class Coverage(TConfigurable):
 
         Returns: a `Coverage` instance, or None.
 
-        .. versionadded:: 5.0
+        .. version-added:: 5.0
 
         """
         if cls._instances:
@@ -241,25 +241,25 @@ class Coverage(TConfigurable):
         :ref:`api_plugin`.  When they are provided, they will override the
         plugins found in the coverage configuration file.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
             The `concurrency` parameter.
 
-        .. versionadded:: 4.2
+        .. version-added:: 4.2
             The `concurrency` parameter can now be a list of strings.
 
-        .. versionadded:: 5.0
+        .. version-added:: 5.0
             The `check_preimported` and `context` parameters.
 
-        .. versionadded:: 5.3
+        .. version-added:: 5.3
             The `source_pkgs` parameter.
 
-        .. versionadded:: 6.0
+        .. version-added:: 6.0
             The `messages` parameter.
 
-        .. versionadded:: 7.7
+        .. version-added:: 7.7
             The `plugins` parameter.
 
-        .. versionadded:: 7.8
+        .. version-added:: 7.8
             The `source_dirs` parameter.
         """
         # Start self.config as a usable default configuration. It will soon be
@@ -304,8 +304,6 @@ class Coverage(TConfigurable):
         self._file_mapper: Callable[[str], str] = abs_file
         self._data_suffix = self._run_suffix = None
         self._exclude_re: dict[str, str] = {}
-        self._analysis_cache: dict[TMorf, Analysis] = {}
-        self._file_reporter_cache: dict[TMorf, FileReporter] = {}
         self._old_sigterm: Callable[[int, FrameType | None], Any] | None = None
 
         # State machine variables:
@@ -518,7 +516,7 @@ class Coverage(TConfigurable):
         As a special case, an `option_name` of ``"paths"`` will return an
         dictionary with the entire ``[paths]`` section value.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
 
         """
         return self.config.get_option(option_name)
@@ -550,7 +548,7 @@ class Coverage(TConfigurable):
         As a special case, an `option_name` of ``"paths"`` will replace the
         entire ``[paths]`` section.  The value should be a dictionary.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
 
         """
         self.config.set_option(option_name, value)
@@ -567,7 +565,6 @@ class Coverage(TConfigurable):
         if not should_skip:
             assert self._data is not None
             self._data.read()
-        self._clear_analysis_caches()
 
     def _init_for_start(self) -> None:
         """Initialization for start()"""
@@ -736,7 +733,7 @@ class Coverage(TConfigurable):
     def collect(self) -> Iterator[None]:
         """A context manager to start/stop coverage measurement collection.
 
-        .. versionadded:: 7.3
+        .. version-added:: 7.3
 
         """
         self.start()
@@ -780,9 +777,8 @@ class Coverage(TConfigurable):
         self._data.erase(parallel=self.config.parallel)
         self._data = None
         self._inited_for_start = False
-        self._clear_analysis_caches()
 
-    def switch_context(self, new_context: str) -> None:
+    def switch_context(self, new_context: str) -> str | None:
         """Switch to a new dynamic context.
 
         `new_context` is a string to use as the :ref:`dynamic context
@@ -792,17 +788,29 @@ class Coverage(TConfigurable):
 
         Coverage collection must be started already.
 
-        .. versionadded:: 5.0
+        Returns the previous context.
+
+        .. version-added:: 5.0
+        .. version-changed:: 7.16.0
+           Now returns the previous context.
 
         """
         if not self._started:  # pragma: part started
             raise CoverageException("Cannot switch context, coverage is not started")
 
+        assert self._core is not None
+        if not self._core.supports_dynamic_contexts:
+            self._warn(
+                "Dynamic contexts aren't supported with core=sysmon; "
+                + "context data may be incomplete",
+                slug="no-sysmon-context",
+                once=True,
+            )
         assert self._collector is not None
         if self._collector.should_start_context:
             self._warn("Conflicting dynamic contexts", slug="dynamic-conflict", once=True)
 
-        self._collector.switch_context(new_context)
+        return self._collector.switch_context(new_context)
 
     def clear_exclude(self, which: str = "exclude") -> None:
         """Clear the exclude list."""
@@ -890,13 +898,13 @@ class Coverage(TConfigurable):
 
         If `keep` is true, then original input data files won't be deleted.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
             The `data_paths` parameter.
 
-        .. versionadded:: 4.3
+        .. version-added:: 4.3
             The `strict` parameter.
 
-        .. versionadded:: 5.5
+        .. version-added:: 5.5
             The `keep` parameter.
         """
         self._init()
@@ -913,7 +921,6 @@ class Coverage(TConfigurable):
             keep=keep,
             message=self._message,
         )
-        self._clear_analysis_caches()
 
     def get_data(self) -> CoverageData:
         """Get the collected data.
@@ -922,7 +929,7 @@ class Coverage(TConfigurable):
 
         Returns a :class:`coverage.CoverageData`, the collected coverage data.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
 
         """
         self._init()
@@ -935,7 +942,6 @@ class Coverage(TConfigurable):
                     self._collector.plugin_was_disabled(plugin)
 
             if self._collector.flush_data():
-                self._clear_analysis_caches()
                 self._post_save_work()
 
         assert self._data is not None
@@ -1004,26 +1010,17 @@ class Coverage(TConfigurable):
             analysis.missing_formatted(),
         )
 
-    def _analyze(self, morf: TMorf) -> Analysis:
+    def _analyze(self, morf: TMorf, file_reporter: FileReporter | None = None) -> Analysis:
         """Analyze a module or file.  Private for now."""
-        analysis = self._analysis_cache.get(morf)
-        if analysis is not None:
-            return analysis
-
         self._init()
         self._post_init()
 
         data = self.get_data()
-        file_reporter = self._get_file_reporter(morf)
+        if file_reporter is None:
+            file_reporter = self._get_file_reporter(morf)
         filename = self._file_mapper(file_reporter.filename)
         analysis = analysis_from_file_reporter(data, self.config.precision, file_reporter, filename)
-        self._analysis_cache[morf] = analysis
         return analysis
-
-    def _clear_analysis_caches(self) -> None:
-        """Forget cached analyses and file reporters, because data changed."""
-        self._analysis_cache.clear()
-        self._file_reporter_cache.clear()
 
     def branch_stats(self, morf: TMorf) -> dict[TLineNo, tuple[int, int]]:
         """Get branch statistics about a module.
@@ -1033,7 +1030,7 @@ class Coverage(TConfigurable):
         Returns a dict mapping line numbers to a tuple:
         (total_exits, taken_exits).
 
-        .. versionadded:: 7.7
+        .. version-added:: 7.7
 
         """
         analysis = self._analyze(morf)
@@ -1041,9 +1038,6 @@ class Coverage(TConfigurable):
 
     def _get_file_reporter(self, morf: TMorf) -> FileReporter:
         """Get a FileReporter for a module or file name."""
-        cached = self._file_reporter_cache.get(morf)
-        if cached is not None:
-            return cached
         assert self._data is not None
         plugin = None
         file_reporter: str | FileReporter = "python"
@@ -1058,17 +1052,13 @@ class Coverage(TConfigurable):
                     file_reporter = plugin.file_reporter(mapped_morf)
                     if file_reporter is None:
                         raise PluginError(
-                            "Plugin {!r} did not provide a file reporter for {!r}.".format(
-                                plugin._coverage_plugin_name,
-                                morf,
-                            ),
+                            f"Plugin {plugin._coverage_plugin_name!r} did not provide a file reporter for {morf!r}.",
                         )
 
         if file_reporter == "python":
             file_reporter = PythonFileReporter(morf, self)
 
         assert isinstance(file_reporter, FileReporter)
-        self._file_reporter_cache[morf] = file_reporter
         return file_reporter
 
     def _get_file_reporters(
@@ -1093,7 +1083,6 @@ class Coverage(TConfigurable):
         if not isinstance(morfs, (list, tuple, set)):
             morfs = [morfs]  # type: ignore[list-item]
 
-        morfs = sorted(morfs, key=lambda m: m if isinstance(m, str) else m.__name__)
         return [(self._get_file_reporter(morf), morf) for morf in morfs]
 
     def _prepare_data_for_reporting(self) -> None:
@@ -1157,16 +1146,16 @@ class Coverage(TConfigurable):
 
         Returns a float, the total percentage covered.
 
-        .. versionadded:: 4.0
+        .. version-added:: 4.0
             The `skip_covered` parameter.
 
-        .. versionadded:: 5.0
+        .. version-added:: 5.0
             The `contexts` and `skip_empty` parameters.
 
-        .. versionadded:: 5.2
+        .. version-added:: 5.2
             The `precision` parameter.
 
-        .. versionadded:: 7.0
+        .. version-added:: 7.0
             The `format` parameter.
 
         """
@@ -1272,7 +1261,9 @@ class Coverage(TConfigurable):
             precision=precision,
         ):
             reporter = HtmlReporter(self)
-            return reporter.report(morfs)
+            assert self._data is not None
+            with self._data.keep_db_open():
+                return reporter.report(morfs)
 
     def xml_report(
         self,
@@ -1330,7 +1321,7 @@ class Coverage(TConfigurable):
 
         Returns a float, the total percentage covered.
 
-        .. versionadded:: 5.0
+        .. version-added:: 5.0
 
         """
         self._prepare_data_for_reporting()
@@ -1362,7 +1353,7 @@ class Coverage(TConfigurable):
 
         See :meth:`report` for other arguments.
 
-        .. versionadded:: 6.3
+        .. version-added:: 6.3
         """
         self._prepare_data_for_reporting()
         with override_config(
@@ -1381,6 +1372,7 @@ class Coverage(TConfigurable):
         import glob
         import platform
         import site
+
         import coverage as covmod
 
         self._init()

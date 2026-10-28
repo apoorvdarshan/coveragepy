@@ -3,6 +3,8 @@
 
 """Code parsing for coverage.py."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 import ast
@@ -13,17 +15,56 @@ import token
 import tokenize
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Optional, Protocol, cast
+from typing import Protocol, cast
 
 from coverage import env
 from coverage.bytecode import ByteParser
 from coverage.debug import short_stack
 from coverage.exceptions import NoSource, NotPython
 from coverage.misc import isolate_module, nice_pair
-from coverage.phystokens import generate_tokens
+from coverage.phystokens import TToken, generate_tokens
 from coverage.types import TArc, TLineNo
 
 os = isolate_module(os)
+
+
+def multiline_map_from_tokens(tokens: Iterable[TToken]) -> dict[TLineNo, TLineNo]:
+    """Compute the multiline map from a stream of tokens.
+
+    The result maps line numbers in multi-line statements to the first line
+    number of their statement.  This is the only place the map is computed:
+    `PythonParser._raw_parse` uses it for parsing and reporting, and the
+    sys.monitoring core uses `multiline_map_from_text` to get the map without
+    paying for a full parse during measurement.
+
+    """
+    multiline_map: dict[TLineNo, TLineNo] = {}
+    # The line number of the first line in a multi-line statement.
+    first_line = 0
+    for toktype, ttext, (slineno, _), (elineno, _), _ in tokens:
+        if toktype == token.NEWLINE:
+            if first_line and elineno != first_line:
+                # We're at the end of a line, and we've ended on a
+                # different line than the first line of the statement,
+                # so record a multi-line range.
+                for lineno in range(first_line, elineno + 1):
+                    multiline_map[lineno] = first_line
+            first_line = 0
+        if ttext.strip() and toktype != tokenize.COMMENT:
+            # A non-white-space token, the first in a statement.
+            if not first_line:
+                first_line = slineno
+    return multiline_map
+
+
+def multiline_map_from_text(text: str) -> dict[TLineNo, TLineNo]:
+    """Compute just the multiline map for `text`, without a full parse.
+
+    Can raise tokenize.TokenError, IndentationError, or SyntaxError if the
+    text isn't parsable as Python.
+
+    """
+    return multiline_map_from_tokens(generate_tokens(text))
 
 
 class PythonParser:
@@ -95,10 +136,9 @@ class PythonParser:
         # Lazily-created arc data, and missing arc descriptions.
         self._all_arcs: set[TArc] | None = None
         self._missing_arc_fragments: TArcFragments | None = None
-        self._with_jump_fixers: dict[TArc, tuple[TArc, TArc]] = {}
+        self._with_jump_fixers: dict[TArc, TArc | None] = {}
 
         self._first_line_cache: dict[TLineNo, TLineNo] = {}
-        self._exit_counts: dict[TLineNo, int] | None = None
 
     def lines_matching(self, regex: str) -> set[TLineNo]:
         """Find the lines matching a regex.
@@ -148,8 +188,9 @@ class PythonParser:
         nesting: int = 0
 
         assert self.text is not None
-        tokgen = generate_tokens(self.text)
-        for toktype, ttext, (slineno, _), (elineno, _), ltext in tokgen:
+        tokens = list(generate_tokens(self.text))
+        self.multiline_map = multiline_map_from_tokens(tokens)
+        for toktype, ttext, (slineno, _), (elineno, _), ltext in tokens:
             if self.show_tokens:  # pragma: debugging
                 print(
                     "%10s %5s %-20r %r"
@@ -179,12 +220,9 @@ class PythonParser:
                 elif ttext in ")]}":
                     nesting -= 1
             elif toktype == token.NEWLINE:
-                if first_line and elineno != first_line:
-                    # We're at the end of a line, and we've ended on a
-                    # different line than the first line of the statement,
-                    # so record a multi-line range.
-                    for l in range(first_line, elineno + 1):
-                        self.multiline_map[l] = first_line
+                # multiline_map_from_tokens() has already recorded this
+                # statement's lines; we only track first_line here for the
+                # exclusion logic.
                 first_line = 0
 
             if ttext.strip() and toktype != tokenize.COMMENT:
@@ -228,6 +266,16 @@ class PythonParser:
                 first_line = min((d.lineno for d in node.decorator_list), default=node.lineno)
                 if self.excluded.intersection(range(first_line, node.lineno + 1)):
                     self.excluded.update(range(first_line, cast(int, node.end_lineno) + 1))
+            # An irrefutable `case` (like `case _:`) is the `match` equivalent
+            # of an `else` clause.  If its whole body is excluded, exclude the
+            # `case` line too, so it isn't left behind as a missing statement.
+            # Refutable cases are left alone, the same way an `elif` line is
+            # still reported.  https://github.com/coveragepy/coveragepy/issues/1563
+            if isinstance(node, ast.match_case) and _case_is_irrefutable(node):
+                body_lines = range(node.body[0].lineno, cast(int, node.body[-1].end_lineno) + 1)
+                body_statements = self.raw_statements & set(body_lines)
+                if body_statements and body_statements <= self.excluded:
+                    self.excluded.update(range(node.pattern.lineno, node.pattern.end_lineno + 1))
 
     def first_line(self, lineno: TLineNo) -> TLineNo:
         """Return the first line number of the statement including `lineno`."""
@@ -247,7 +295,7 @@ class PythonParser:
         Returns a set of the first lines.
 
         """
-        return {self.first_line(l) for l in linenos}
+        return {self.first_line(lineno) for lineno in linenos}
 
     def translate_lines(self, lines: Iterable[TLineNo]) -> set[TLineNo]:
         """Implement `FileReporter.translate_lines`."""
@@ -316,6 +364,10 @@ class PythonParser:
 
         self._missing_arc_fragments = aaa.missing_arc_fragments
 
+        # The AST is large and no longer needed: everything derived from it is
+        # memoized above.  Release it so long-lived parsers don't hold it.
+        self._ast_root = None
+
     def fix_with_jumps(self, arcs: Iterable[TArc]) -> set[TArc]:
         """Adjust arcs to fix jumps leaving `with` statements.
 
@@ -330,31 +382,17 @@ class PythonParser:
         it to the user as if it had been 1, 2, 3, 4.  The arc 3->1 should be
         replaced with 3->4, and 1->4 should be removed.
 
-        For this code, the fixers dict is {(3, 1): ((1, 4), (3, 4))}.  The key
-        is the actual measured arc from the end of the with block back to the
-        start of the with-statement.  The values are start_next (the with
-        statement to the next statement after the with), and end_next (the end
-        of the with-statement to the next statement after the with).
-
-        With nested with-statements, we have to trace through a few levels to
-        correct a longer chain of arcs.
+        For this code, the fixers dict is {(3, 1): (3, 4), (1, 4): None}.  The
+        keys are arcs to adjust.  The values are the arcs to use instead, or
+        None if the arc should be removed.
 
         """
-        to_remove = set()
-        to_add = set()
+        fixed = set()
         for arc in arcs:
-            if arc in self._with_jump_fixers:
-                end0 = arc[0]
-                to_remove.add(arc)
-                start_next, end_next = self._with_jump_fixers[arc]
-                while start_next in self._with_jump_fixers:
-                    to_remove.add(start_next)
-                    start_next, end_next = self._with_jump_fixers[start_next]
-                    to_remove.add(end_next)
-                to_add.add((end0, end_next[1]))
-                to_remove.add(start_next)
-        arcs = (set(arcs) | to_add) - to_remove
-        return arcs
+            new_arc = self._with_jump_fixers.get(arc, arc)
+            if new_arc is not None:
+                fixed.add(new_arc)
+        return fixed
 
     def exit_counts(self) -> dict[TLineNo, int]:
         """Get a count of exits from that each line.
@@ -362,20 +400,18 @@ class PythonParser:
         Excluded lines are excluded.
 
         """
-        if self._exit_counts is None:
-            exit_counts: dict[TLineNo, int] = collections.defaultdict(int)
-            for l1, l2 in self.arcs():
-                assert l1 > 0, f"{l1=} should be greater than zero in {self.filename}"
-                if l1 in self.excluded:
-                    # Don't report excluded lines as line numbers.
-                    continue
-                if l2 in self.excluded:
-                    # Arcs to excluded lines shouldn't count.
-                    continue
-                exit_counts[l1] += 1
-            self._exit_counts = exit_counts
+        exit_counts: dict[TLineNo, int] = collections.defaultdict(int)
+        for l1, l2 in self.arcs():
+            assert l1 > 0, f"{l1=} should be greater than zero in {self.filename}"
+            if l1 in self.excluded:
+                # Don't report excluded lines as line numbers.
+                continue
+            if l2 in self.excluded:
+                # Arcs to excluded lines shouldn't count.
+                continue
+            exit_counts[l1] += 1
 
-        return self._exit_counts
+        return exit_counts
 
     def _finish_action_msg(self, action_msg: str | None, end: TLineNo) -> str:
         """Apply some defaulting and formatting to an arc's description."""
@@ -408,10 +444,7 @@ class PythonParser:
 
     def arc_description(self, start: TLineNo, end: TLineNo) -> str:
         """Provide an English description of an arc's effect."""
-        if self._missing_arc_fragments is None:
-            self._analyze_ast()
-            assert self._missing_arc_fragments is not None
-
+        assert self._missing_arc_fragments is not None
         fragment_pairs = self._missing_arc_fragments.get((start, end), [(None, None)])
         action_msg = self._finish_action_msg(fragment_pairs[0][1], end)
         return action_msg
@@ -478,9 +511,10 @@ class TAddArcFn(Protocol):
         10" or "exit from function 'fooey'."
 
         """
+        ...
 
 
-TArcFragments = dict[TArc, list[tuple[Optional[str], Optional[str]]]]
+TArcFragments = dict[TArc, list[tuple[str | None, str | None]]]
 
 
 class Block:
@@ -606,6 +640,24 @@ def walk_statement_nodes(root: ast.AST) -> Iterable[ast.AST]:
                 todo.append(child)
 
 
+def _case_is_irrefutable(case: ast.match_case) -> bool:
+    """Will this `case` clause always match, like `case _:` does?
+
+    An irrefutable case has a wildcard or bare-capture pattern and no guard,
+    so anything reaching it will match.  These are the `match` equivalent of
+    an `else` clause.
+
+    """
+    if case.guard is not None:
+        return False
+    pattern = case.pattern
+    while isinstance(pattern, ast.MatchOr):
+        pattern = pattern.patterns[-1]
+    while isinstance(pattern, ast.MatchAs) and pattern.pattern is not None:
+        pattern = pattern.pattern
+    return isinstance(pattern, ast.MatchAs) and pattern.pattern is None
+
+
 def is_constant_test_expr(node: ast.AST) -> tuple[bool, bool]:
     """Is this a compile-time constant test expression?
 
@@ -662,7 +714,7 @@ class AstArcAnalyzer:
     ) -> None:
         self.filename = filename
         self.root_node = root_node
-        self.statements = {multiline.get(l, l) for l in statements}
+        self.statements = {multiline.get(lineno, lineno) for lineno in statements}
         self.multiline = multiline
 
         # Turn on AST dumps with an environment variable.
@@ -701,30 +753,53 @@ class AstArcAnalyzer:
             elif isinstance(node, ast.Module):
                 self._code_object__Module(node)
 
-    def with_jump_fixers(self) -> dict[TArc, tuple[TArc, TArc]]:
+    def with_jump_fixers(self) -> dict[TArc, TArc | None]:
         """Get a dict with data for fixing jumps out of with statements.
 
-        Returns a dict.  The keys are arcs leaving a with-statement by jumping
-        back to its start.  The values are pairs: first, the arc from the start
-        to the next statement, then the arc that exits the with without going
-        to the start.
+        Returns a dict.  The keys are arcs that need adjusting: arcs jumping
+        back to the start of a with-statement at the end of its body, and arcs
+        from the start of a with-statement to the next statement.  The values
+        are the arcs to use instead, or None if the arc should be removed.
 
         """
-        fixers = {}
         with_nexts = {
             arc
             for arc in self.arcs
             if arc[0] in self.all_with_starts and arc not in self.with_entries
         }
+        nexts: dict[TLineNo, TLineNo] = {}
         for start in self.all_with_starts:
-            nexts = {arc[1] for arc in with_nexts if arc[0] == start}
-            if not nexts:
+            start_nexts = {arc[1] for arc in with_nexts if arc[0] == start}
+            if not start_nexts:
                 continue
-            assert len(nexts) == 1, f"Expected one arc, got {nexts} with {start = }"
-            nxt = nexts.pop()
-            ends = {arc[0] for arc in self.with_exits if arc[1] == start}
-            for end in ends:
-                fixers[(end, start)] = ((start, nxt), (end, nxt))
+            assert len(start_nexts) == 1, f"Expected one arc, got {start_nexts} with {start = }"
+            nexts[start] = start_nexts.pop()
+
+        def final_next(start: TLineNo) -> TLineNo:
+            # A with-statement ending the body of an outer with-statement jumps
+            # to the start of the outer one, which then jumps to its own next
+            # statement, and so on.  We want where the chain finally lands.
+            nxt = nexts[start]
+            while (start, nxt) in self.with_exits and nxt in nexts:
+                start, nxt = nxt, nexts[nxt]
+            return nxt
+
+        fixers: dict[TArc, TArc | None] = {}
+        for end, start in self.with_exits:
+            # A `with` statement can have no onward arc, for example if it
+            # ends a `finally` clause whose `try` clause can't complete
+            # normally.  There is nowhere to redirect the jump to, so the
+            # arc is left alone.
+            if start in nexts:
+                fixers[(end, start)] = (end, final_next(start))
+        for start, nxt in nexts.items():
+            # Leaving a body on its own lines jumps back to the start, and that
+            # jump is fixed above, so the arc onward from the start is
+            # redundant, even when it's an inner with jumping to an outer one.
+            # A body on the same line as the start doesn't jump back, so the
+            # arc onward from the start is the only record of leaving the with.
+            if (start, start) not in self.with_exits:
+                fixers[(start, nxt)] = None
         return fixers
 
     # Code object dispatchers: _code_object__*
@@ -837,19 +912,21 @@ class AstArcAnalyzer:
         return 1
 
     # The node types that just flow to the next node with no complications.
-    OK_TO_DEFAULT = {
-        "AnnAssign",
-        "Assign",
-        "Assert",
-        "AugAssign",
-        "Delete",
-        "Expr",
-        "Global",
-        "Import",
-        "ImportFrom",
-        "Nonlocal",
-        "Pass",
-    }
+    OK_TO_DEFAULT = frozenset(
+        (
+            "AnnAssign",
+            "Assign",
+            "Assert",
+            "AugAssign",
+            "Delete",
+            "Expr",
+            "Global",
+            "Import",
+            "ImportFrom",
+            "Nonlocal",
+            "Pass",
+        )
+    )
 
     def node_exits(self, node: ast.AST) -> set[ArcStart]:
         """Find the set of arc starts that exit this node.
@@ -1059,14 +1136,7 @@ class AstArcAnalyzer:
             last_start = case_start
 
         # case is now the last case, check for wildcard match.
-        pattern = case.pattern  # pylint: disable=undefined-loop-variable
-        while isinstance(pattern, ast.MatchOr):
-            pattern = pattern.patterns[-1]
-        while isinstance(pattern, ast.MatchAs) and pattern.pattern is not None:
-            pattern = pattern.pattern
-        had_wildcard = (
-            isinstance(pattern, ast.MatchAs) and pattern.pattern is None and case.guard is None  # pylint: disable=undefined-loop-variable
-        )
+        had_wildcard = _case_is_irrefutable(case)  # pylint: disable=undefined-loop-variable
 
         if not had_wildcard:
             exits.add(

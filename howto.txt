@@ -1,4 +1,4 @@
-* Release checklist
+### Release checklist
 
 - Check that the current virtualenv matches the current coverage branch.
     $ g ma
@@ -32,17 +32,12 @@
     - Check that the docs build correctly:
         $ tox -e doc
 - commit the release-prep changes
-    $ make relcommit1
-- Generate new sample_html to get the latest, incl footer version number:
+    $ make relcommit
+- Generate new sample_html to get the latest, and publish:
     - IF PRE-RELEASE:
-        $ make sample_html_beta relcommit2 install
+        $ make sample_html_beta install publishbeta
     - IF NOT PRE-RELEASE:
-        $ make sample_html relcommit2 install
-- Build and publish docs:
-    - IF PRE-RELEASE:
-        $ make publishbeta
-    - ELSE:
-        $ make publish
+        $ make sample_html install publish
     - commit and publish nedbatchelder.com
 - Done with changes to source files
     $ g puo; gshipit
@@ -65,6 +60,7 @@
 - Tag the tree, update GitHub releases and comment on issues:
     $ make clean tag github_releases comment_on_fixes
 - Bump version:
+    - commit any build process changes
     $ make bump_version
 $ deopvars
 - Once CI passes, merge the bump-version branch to main and push it
@@ -76,3 +72,12 @@ $ deopvars
             - pre-releases should be hidden
     - IF NOT PRE-RELEASE:
         $ opvars; make update_rtd; deopvars
+
+
+### Pushing changes to pull requests
+
+withop github gh pr checkout 2206
+.. edit files..
+g ci -am "etc"
+withop github git -c credential.helper='!gh auth git-credential' push
+g ma; g brdel-

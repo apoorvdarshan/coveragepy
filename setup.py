@@ -6,14 +6,13 @@
 # Setuptools setup for coverage.py
 # This file is used unchanged under all versions of Python.
 
-import re
 import os
 import os.path
 import platform
+import re
 import sys
 import textwrap
 import zipfile
-
 from pathlib import Path
 from typing import Any
 
@@ -48,15 +47,6 @@ def get_long_description(url: str) -> str:
     return long_description
 
 
-def count_contributors() -> int:
-    """Read CONTRIBUTORS.txt to count how many people have helped."""
-    with open("CONTRIBUTORS.txt", "rb") as contributors:
-        paras = contributors.read().split(b"\n\n")
-        num_others = len(paras[-1].splitlines())
-        num_others += 1  # Count Gareth Rees, who is mentioned in the top paragraph.
-    return num_others
-
-
 # PYVERSIONS
 CLASSIFIERS = textwrap.dedent("""\
     Development Status :: 5 - Production/Stable
@@ -65,7 +55,6 @@ CLASSIFIERS = textwrap.dedent("""\
     Operating System :: OS Independent
     Programming Language :: Python
     Programming Language :: Python :: 3
-    Programming Language :: Python :: 3.10
     Programming Language :: Python :: 3.11
     Programming Language :: Python :: 3.12
     Programming Language :: Python :: 3.13
@@ -131,7 +120,7 @@ class BuildFailed(Exception):
 
     def __init__(self) -> None:
         Exception.__init__(self)
-        self.cause = sys.exc_info()[1]  # work around py 2/3 different syntax
+        self.cause = sys.exception()
 
 
 class ve_build_ext(build_ext):  # type: ignore[misc]
@@ -193,8 +182,10 @@ setup_args = dict(
         ],
     },
     extras_require={
-        # Enable pyproject.toml support.
-        "toml": ['tomli; python_full_version<="3.11.0a6"'],
+        # Before Python 3.11, this installed optional toml support.
+        # 3.11 doesn't need a library for toml, but we keep the empty extra so
+        # that people who were installing with it are not broken.
+        "toml": [],
     },
     cmdclass={
         "build_ext": ve_build_ext,
@@ -202,14 +193,14 @@ setup_args = dict(
     },
     # We need to get HTML assets from our htmlfiles directory.
     zip_safe=False,
-    author=f"Ned Batchelder and {count_contributors()} others",
+    author="Ned Batchelder and many others",
     author_email="ned@nedbatchelder.com",
     description=__doc__,
     long_description=get_long_description(url=version_data["__url__"]),
     long_description_content_type="text/x-rst",
     keywords="code coverage testing",
     license="Apache-2.0",
-    license_files=["LICENSE.txt"],
+    license_files=["LICENSE.txt", "NOTICE.txt"],
     classifiers=CLASSIFIERS,
     url="https://github.com/coveragepy/coveragepy",
     project_urls={
@@ -222,7 +213,7 @@ setup_args = dict(
         "Mastodon": "https://hachyderm.io/@coveragepy",
         "Mastodon (nedbat)": "https://hachyderm.io/@nedbat",
     },
-    python_requires=">=3.10",  # minimum of PYVERSIONS
+    python_requires=">=3.11",  # minimum of PYVERSIONS
 )
 
 # There are a few reasons we might not be able to compile the C extension.

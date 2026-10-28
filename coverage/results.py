@@ -3,15 +3,18 @@
 
 """Results of coverage measurement."""
 
+# pragma: enforce 100% coverage
+
 from __future__ import annotations
 
 import collections
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from coverage.exceptions import ConfigError
-from coverage.misc import nice_pair
+from coverage.misc import first, nice_pair
 from coverage.types import TArc, TLineNo
 
 if TYPE_CHECKING:
@@ -40,9 +43,7 @@ def analysis_from_file_reporter(
         dests = collections.defaultdict(set)
         for fromno, tono in arc_possibilities_set:
             dests[fromno].add(tono)
-        single_dests = {
-            fromno: list(tonos)[0] for fromno, tonos in dests.items() if len(tonos) == 1
-        }
+        single_dests = {fromno: first(tonos) for fromno, tonos in dests.items() if len(tonos) == 1}
         new_arcs = set()
         for fromno, tono in arcs:
             if fromno != tono:
@@ -408,6 +409,9 @@ def display_covered(pc: float, precision: int) -> str:
     result in either "0" or "100".
 
     """
+    if precision < 0:
+        raise ConfigError(f"precision={precision} is invalid. Must not be negative.")
+
     near0 = 1.0 / 10**precision
     if 0 < pc < near0:
         pc = near0
@@ -480,12 +484,20 @@ def format_lines(
     return ret
 
 
+def _fail_under_precision(fail_under: float, precision: int) -> int:
+    """Use at least enough decimal places to represent the threshold."""
+    if fail_under == int(fail_under):
+        return precision
+    exponent = Decimal(str(fail_under)).as_tuple().exponent
+    return max(precision, -int(exponent))
+
+
 def should_fail_under(total: float, fail_under: float, precision: int) -> bool:
     """Determine if a total should fail due to fail-under.
 
     `total` is a float, the coverage measurement total. `fail_under` is the
-    fail_under setting to compare with. `precision` is the number of digits
-    to consider after the decimal point.
+    fail_under setting to compare with. `precision` is the minimum number of
+    digits to consider after the decimal point. The threshold can imply more.
 
     Returns True if the total should fail.
 
@@ -499,4 +511,23 @@ def should_fail_under(total: float, fail_under: float, precision: int) -> bool:
     if fail_under == 100.0 and total != 100.0:
         return True
 
-    return round(total, precision) < fail_under
+    return round(total, _fail_under_precision(fail_under, precision)) < fail_under
+
+
+def format_fail_under_msg(total: float, fail_under: float, precision: int) -> str:
+    """Format the fail-under failure message with values that match the check.
+
+    Use the same effective precision as `should_fail_under`, including the
+    decimal places implied by `fail_under`.
+
+    """
+    precision = _fail_under_precision(fail_under, precision)
+    if fail_under == 100.0 and total != 100.0:
+        # The 100% special case does not use round(); keep the display clamp
+        # so near-100 totals still read as "99" rather than a rounded "100".
+        shown_total = display_covered(total, precision)
+    else:
+        shown_total = f"{round(total, precision):.{precision}f}"
+
+    shown_fail_under = f"{fail_under:.{precision}f}"
+    return f"total of {shown_total} is less than fail-under={shown_fail_under}"

@@ -13,26 +13,25 @@ import os
 import os.path
 import re
 import sys
-
+from contextlib import chdir
 from html.parser import HTMLParser
-from typing import Any, IO
+from typing import IO, Any
 from unittest import mock
 
 import pytest
 
 import coverage
 import coverage.html
-from coverage import env, Coverage
-from coverage.exceptions import NoDataError, NotPython, NoSource
+from coverage import Coverage, env
+from coverage.exceptions import NoDataError, NoSource, NotPython
 from coverage.files import abs_file, flat_rootname
+from coverage.misc import import_local_file
 from coverage.report_core import get_analysis_to_report
 from coverage.types import TLineNo, TMorf
-
 from tests import testenv
-from tests.coveragetest import CoverageTest, TESTS_DIR
-from tests.goldtest import gold_path
-from tests.goldtest import compare, contains, contains_rx, doesnt_contain, contains_any
-from tests.helpers import assert_coverage_warnings, change_dir
+from tests.coveragetest import TESTS_DIR, CoverageTest
+from tests.goldtest import compare, contains, contains_any, contains_rx, doesnt_contain, gold_path
+from tests.helpers import assert_coverage_warnings
 
 
 class HtmlTestHelpers(CoverageTest):
@@ -184,7 +183,23 @@ class HtmlReportParser(HTMLParser):
 
     def text(self) -> list[str]:
         """Get the rendered text as a list of strings, one per line."""
-        return ["".join(l).rstrip() for l in self.lines]
+        return ["".join(line).rstrip() for line in self.lines]
+
+
+class EventHandlerCollector(HTMLParser):
+    """Collect any ``on*`` event-handler attributes the report emitted.
+
+    Used to detect markup injected by breaking out of an attribute value.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.handlers: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for attr_name, _ in attrs:
+            if attr_name.startswith("on"):
+                self.handlers.append((tag, attr_name))  # pragma: only failure
 
 
 class FileWriteTracker:
@@ -377,6 +392,48 @@ class HtmlDeltaTest(HtmlTestHelpers, CoverageTest):
         # The 100% file, skipped, shouldn't be here.
         self.assert_doesnt_exist("htmlcov/helper1_py.html")
 
+    def test_file_becomes_100_updates_neighbor_links(self) -> None:
+        # helper2 drops out of a skip_covered report. helper1 and helper3 haven't
+        # changed, but their pages link to helper2, so they have to be written again.
+        self.make_file(
+            "main_file.py",
+            """\
+            import helper1, helper2, helper3
+            helper1.func(12)
+            helper2.func(12)
+            helper3.func(12)
+            """,
+        )
+        for name in ["helper1", "helper2", "helper3"]:
+            self.make_file(
+                f"{name}.py",
+                """\
+                def func(x):
+                    if x % 2:
+                        print("odd")
+                """,
+            )
+        self.run_coverage(htmlargs=dict(skip_covered=True))
+        self.assert_exists("htmlcov/helper2_py.html")
+
+        # Now helper2 is 100% covered.
+        self.make_file(
+            "main_file.py",
+            """\
+            import helper1, helper2, helper3
+            helper1.func(12)
+            helper2.func(12)
+            helper2.func(23)
+            helper3.func(12)
+            """,
+        )
+        self.run_coverage(htmlargs=dict(skip_covered=True))
+
+        # run_coverage checked that no page links to the deleted helper2 page.
+        self.assert_doesnt_exist("htmlcov/helper2_py.html")
+        assert "htmlcov/helper1_py.html" in self.files_written
+        assert "htmlcov/helper3_py.html" in self.files_written
+
     def test_status_format_change(self) -> None:
         self.create_initial_files()
         self.run_coverage()
@@ -547,7 +604,7 @@ class HtmlWithUnparsableFilesTest(HtmlTestHelpers, CoverageTest):
         cov.html_report()
 
         html_report = self.get_html_report_content("sub/not_ascii.py")
-        expected = "# Isn't this great?&#65533;!"
+        expected = "# Isn&#x27;t this great?&#65533;!"
         assert expected in html_report
 
     def test_formfeeds(self) -> None:
@@ -592,8 +649,8 @@ class HtmlWithUnparsableFilesTest(HtmlTestHelpers, CoverageTest):
 
         # Check that the lines are properly decoded and reported...
         html_lines = the_html.split("\n")
-        assert any(re.search(r'id="t2".*"this is line 2"', line) for line in html_lines)
-        assert any(re.search(r'id="t9".*"this is line 9"', line) for line in html_lines)
+        assert any(re.search(r'id="t2".*&quot;this is line 2&quot;', line) for line in html_lines)
+        assert any(re.search(r'id="t9".*&quot;this is line 9&quot;', line) for line in html_lines)
 
 
 class HtmlTest(HtmlTestHelpers, CoverageTest):
@@ -704,7 +761,7 @@ class HtmlTest(HtmlTestHelpers, CoverageTest):
             normal()
         """,
         )
-        res = self.run_coverage(covargs=dict(source="."), htmlargs=dict(skip_covered=True))
+        res = self.run_coverage(htmlargs=dict(skip_covered=True))
         assert res == 100.0
         self.assert_doesnt_exist("htmlcov/main_file_py.html")
         # Since there are no files to report, we can't collect any region
@@ -723,7 +780,7 @@ class HtmlTest(HtmlTestHelpers, CoverageTest):
             normal()
         """,
         )
-        res = self.run_coverage(covargs=dict(source="."), htmlargs=dict(skip_covered=True))
+        res = self.run_coverage(htmlargs=dict(skip_covered=True))
         assert res == 80.0
         self.assert_exists("htmlcov/main_file_py.html")
         # We have a file to report, so we get function and class index pages,
@@ -811,7 +868,7 @@ def unbust(directory: str) -> None:
 
     This makes it possible for us to compare gold files.
     """
-    with change_dir(directory):
+    with chdir(directory):
         for fname in os.listdir("."):
             base, ext = os.path.splitext(fname)
             base, _, _ = base.partition("_cb_")
@@ -957,7 +1014,7 @@ assert len(math.encode('utf-8')) == 21
         compare_html(gold_path("html/bom"), "out/bom")
         contains(
             "out/bom/bom_py.html",
-            '<span class="str">"3&#215;4 = 12, &#247;2 = 6&#177;0"</span>',
+            '<span class="str">&quot;3&#215;4 = 12, &#247;2 = 6&#177;0&quot;</span>',
         )
 
     def test_isolatin1(self) -> None:
@@ -979,7 +1036,7 @@ assert len(math) == 18
         compare_html(gold_path("html/isolatin1"), "out/isolatin1")
         contains(
             "out/isolatin1/isolatin1_py.html",
-            '<span class="str">"3&#215;4 = 12, &#247;2 = 6&#177;0"</span>',
+            '<span class="str">&quot;3&#215;4 = 12, &#247;2 = 6&#177;0&quot;</span>',
         )
 
     def make_main_etc(self) -> None:
@@ -1100,7 +1157,7 @@ assert len(math) == 18
             """,
         )
 
-        with change_dir("src"):
+        with chdir("src"):
             sys.path.insert(0, "../othersrc")
             cov = coverage.Coverage(include=["./*", "../othersrc/*"])
             self.start_import_stop(cov, "here")
@@ -1312,10 +1369,10 @@ assert len(math) == 18
             "htmlcov/backslashes_py.html",
             # line 2 is `"bbb \`
             r'<a id="t2" href="#t2">2</a></span>'
-            + r'<span class="t">     <span class="str">"bbb \</span>',
+            + r'<span class="t">     <span class="str">&quot;bbb \</span>',
             # line 3 is `ccc"]`
             r'<a id="t3" href="#t3">3</a></span>'
-            + r'<span class="t"><span class="str">     ccc"</span><span class="op">]</span>',
+            + r'<span class="t"><span class="str">     ccc&quot;</span><span class="op">]</span>',
         )
 
         assert self.get_html_report_text_lines("backslashes.py") == [
@@ -1397,13 +1454,16 @@ assert len(math) == 18
         compare_html(gold_path("html/unicode"), "out/unicode")
         contains(
             "out/unicode/unicode_py.html",
-            '<span class="str">"&#654;d&#729;&#477;b&#592;&#633;&#477;&#652;o&#596;"</span>',
+            (
+                '<span class="str">&quot;&#654;d&#729;&#477;b'
+                + "&#592;&#633;&#477;&#652;o&#596;&quot;</span>"
+            ),
         )
 
         contains_any(
             "out/unicode/unicode_py.html",
-            '<span class="str">"db40,dd00: x&#56128;&#56576;"</span>',
-            '<span class="str">"db40,dd00: x&#917760;"</span>',
+            '<span class="str">&quot;db40,dd00: x&#56128;&#56576;&quot;</span>',
+            '<span class="str">&quot;db40,dd00: x&#917760;&quot;</span>',
         )
 
     def test_accented_dot_py(self) -> None:
@@ -1417,6 +1477,18 @@ assert len(math) == 18
         with open("htmlcov/index.html", encoding="utf-8") as indexf:
             index = indexf.read()
         assert '<a href="h&#226;t_py.html">h&#226;t.py</a>' in index
+
+    def test_ampersand_in_filename(self) -> None:
+        # The file name on the index pages is escaped once, not twice.
+        self.make_file("a&b.py", "print('ampersand')")
+        self.make_data_file(lines={abs_file("a&b.py"): [1]})
+        cov = coverage.Coverage()
+        cov.load()
+        cov.html_report()
+        for page in ["index.html", "function_index.html"]:
+            with open(f"htmlcov/{page}", encoding="utf-8") as indexf:
+                index = indexf.read()
+            assert '<a href="a&amp;b_py.html">a&amp;b.py</a>' in index
 
     def test_accented_directory(self) -> None:
         # Make a file with a non-ascii character in the directory name.
@@ -1438,6 +1510,24 @@ assert len(math) == 18
             + "</a>"
         )
         assert expected % os.sep in index
+
+    @pytest.mark.skipif(env.WINDOWS, reason="Windows filenames can't contain quotes")
+    def test_filename_cant_break_out_of_href(self) -> None:
+        # Source file names are dropped into href="..." attributes on the index
+        # and file pages.  A name with a double quote (legal on POSIX) must not
+        # close the attribute early and inject an event handler.
+        name = 'a" onmouseover="alert(1).py'
+        self.make_file(name, "print('hi')")
+        self.make_data_file(lines={abs_file(name): [1]})
+        cov = coverage.Coverage()
+        cov.load()
+        cov.html_report()
+
+        for page in glob.glob("htmlcov/*.html"):
+            with open(page, encoding="utf-8") as f:
+                parser = EventHandlerCollector()
+                parser.feed(f.read())
+            assert parser.handlers == [], f"Injected handler in {page}: {parser.handlers}"
 
 
 @pytest.mark.skipif(not testenv.DYN_CONTEXTS, reason="No dynamic contexts with this core.")
@@ -1544,6 +1634,27 @@ class HtmlWithContextsTest(HtmlTestHelpers, CoverageTest):
                 if label == ld.contexts_label or label in (ld.contexts or ())
             ]
             assert sorted(expected) == sorted(actual)
+
+    def test_context_labels_cant_break_out_of_script(self) -> None:
+        # switch_context takes an arbitrary string (pytest-cov passes test node
+        # ids), so a label can contain "</script>".  It's dropped into an inline
+        # <script> block in the file page, and must not close the element early.
+        label = "</script><img src=x onerror=alert(1)>"
+        self.make_file("two_tests.py", self.SOURCE)
+        cov = coverage.Coverage(source=["."])
+        cov.set_option("html:show_contexts", True)
+        with cov.collect():
+            cov.switch_context(label)
+            mod = import_local_file("two_tests")
+        cov.html_report(mod, directory="htmlcov")
+
+        html = self.get_html_report_content("two_tests.py")
+        assert label not in html
+        assert "\\u003c/script\\u003e" in html
+        # The escaped JSON still decodes to the original label.
+        blob = re.search(r"contexts = (\{.*?\n\s*\})", html, re.DOTALL)
+        assert blob is not None
+        assert label in json.loads(blob.group(1)).values()
 
 
 class HtmlHelpersTest(HtmlTestHelpers, CoverageTest):

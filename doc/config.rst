@@ -43,10 +43,6 @@ order: :file:`.coveragerc.toml`, :file:`setup.cfg`, :file:`tox.ini`, or
 :file:`pyproject.toml`.  The first file found with coverage.py settings will be
 used and other files won't be consulted.
 
-Coverage.py will read from "pyproject.toml" if TOML support is available,
-either because you are running on Python 3.11 or later, or because you
-installed with the ``toml`` extra (``pip install coverage[toml]``).
-
 
 Syntax
 ------
@@ -324,7 +320,7 @@ addition to statement coverage.
 ``coverage run`` with no further arguments.  Coverage.py options cannot be
 specified here, other than ``-m`` to indicate the module to run.
 
-.. versionadded:: 5.0
+.. version-added:: 5.0
 
 
 .. _config_run_concurrency:
@@ -346,7 +342,7 @@ See :ref:`subprocess` for details of multi-process measurement.
 
 Before version 4.2, this option only accepted a single string.
 
-.. versionadded:: 4.0
+.. version-added:: 4.0
 
 
 .. _config_run_context:
@@ -357,7 +353,7 @@ Before version 4.2, this option only accepted a single string.
 (string) The static context to record for this coverage run. See
 :ref:`contexts` for more information
 
-.. versionadded:: 5.0
+.. version-added:: 5.0
 
 
 .. _config_run_core:
@@ -381,7 +377,7 @@ to use. Valid values are:
 This setting was previously only available as the COVERAGE_CORE environment
 variable.
 
-.. versionadded:: 7.9
+.. version-added:: 7.9
 
 
 .. _config_run_cover_pylib:
@@ -508,7 +504,7 @@ Available patches:
   and will require combining data files before reporting.  See
   :ref:`cmd_combine` for more details.
 
-.. versionadded:: 7.10
+.. version-added:: 7.10
 
 
 .. _config_run_plugins:
@@ -533,7 +529,7 @@ Note that setting ``source`` has to be done in the configuration file rather
 than the command line for this option to work, since the reporting commands
 need to know the source origin.
 
-.. versionadded:: 5.0
+.. version-added:: 5.0
 
 
 .. _config_run_sigterm:
@@ -552,7 +548,7 @@ setting has no effect.
 
 .. _issue 1310: https://github.com/coveragepy/coveragepy/issues/1310
 
-.. versionadded:: 6.4 (in 6.3 this was always enabled)
+.. version-added:: 6.4 (in 6.3 this was always enabled)
 
 
 .. _config_run_source:
@@ -573,7 +569,7 @@ execution.  If set, ``include`` is ignored. See :ref:`source` for details.
 Operates the same as ``source``, but only names packages, for resolving
 ambiguities between packages and directories.
 
-.. versionadded:: 5.3
+.. version-added:: 5.3
 
 
 .. _config_run_source_dirs:
@@ -585,7 +581,7 @@ ambiguities between packages and directories.
 Operates the same as ``source``, but only names directories, for resolving
 ambiguities between packages and directories.
 
-.. versionadded:: 7.8
+.. version-added:: 7.8
 
 
 .. _config_run_timid:
@@ -719,7 +715,7 @@ default exclude patterns like ``pragma: no cover`` instead of overwriting them.
 
 See :ref:`config_report_exclude_lines` for further details.
 
-.. versionadded:: 7.2.0
+.. version-added:: 7.2.0
 
 
 .. _config_report_exclude_lines:
@@ -754,9 +750,11 @@ your regexes.  Use the scoped flag form instead: ``(?s:...)``
 ...................
 
 (float) A target coverage percentage.  If the total coverage measurement is
-under this value, then exit with a status code of 2.  If you specify a
-non-integral value, you must also set ``[report] precision`` properly to make
-use of the decimal places.  A setting of 100 will fail any value under 100,
+under this value, then exit with a status code of 2.  The comparison and
+failure message use the greater of ``[report] precision`` and the number of
+decimal places in this value.  This does not change the precision of the
+report itself.
+A setting of 100 will fail any value under 100,
 regardless of the number of decimal places of precision.
 
 
@@ -770,7 +768,7 @@ is "text" which produces a simple textual table. You can use "markdown" to
 produce a Markdown table, or "total" to output only the total coverage
 percentage.
 
-.. versionadded:: 7.0
+.. version-added:: 7.0
 
 
 .. _config_report_ignore_errors:
@@ -802,7 +800,7 @@ namespace packages`_, and are usually skipped.
 
 .. _implicit namespace packages: https://peps.python.org/pep-0420/
 
-.. versionadded:: 7.0
+.. version-added:: 7.0
 
 
 .. _config_report_omit:
@@ -827,7 +825,7 @@ like ``pragma: no branch`` instead of overwriting them.
 
 See :ref:`config_report_partial_branches` for further details.
 
-.. versionadded:: 7.10.0
+.. version-added:: 7.10.0
 
 
 .. _config_report_partial_branches:
@@ -852,7 +850,8 @@ without overwriting the default set.
 (integer) The number of digits after the decimal point to display for reported
 coverage percentages.  The default is 0, displaying for example "87%".  A value
 of 2 will display percentages like "87.32%".  This setting also affects the
-interpretation of the ``fail_under`` setting.
+interpretation of the ``fail_under`` setting, unless the threshold requires
+more decimal places.
 
 
 .. _config_report_show_missing:
@@ -937,7 +936,7 @@ contexts executed the line.  See :ref:`dynamic_contexts` for details.
 (boolean, defaulted from ``[report] skip_covered``) Don't include files in the
 report that are 100% covered files. See :ref:`cmd_report` for more information.
 
-.. versionadded:: 5.4
+.. version-added:: 5.4
 
 
 .. _config_html_skip_empty:
@@ -949,7 +948,7 @@ report that are 100% covered files. See :ref:`cmd_report` for more information.
 (those that have 0 statements) in the report. See :ref:`cmd_report` for more
 information.
 
-.. versionadded:: 5.4
+.. version-added:: 5.4
 
 
 .. _config_html_title:
@@ -996,7 +995,7 @@ The default is that all directories are reported as packages.
 Settings particular to JSON reporting.  The settings in the ``[report]``
 section also apply to JSON output, where appropriate.
 
-.. versionadded:: 5.0
+.. version-added:: 5.0
 
 
 .. _config_json_output:
@@ -1032,7 +1031,7 @@ contexts executed each line.  See :ref:`dynamic_contexts` for details.
 
 Settings particular to LCOV reporting (see :ref:`cmd_lcov`).
 
-.. versionadded:: 6.3
+.. version-added:: 6.3
 
 .. _config_lcov_output:
 
@@ -1052,4 +1051,4 @@ them, and do not verify the ordering of lines, they provide only a weak
 assurance that the source code available to analysis tools (e.g. ``genhtml``)
 matches the code that was used to generate the coverage data.
 
-.. versionadded:: 7.6.2
+.. version-added:: 7.6.2
