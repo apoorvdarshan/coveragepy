@@ -23,6 +23,11 @@ upgrading your version of coverage.py.
 Unreleased
 ----------
 
+- Fix: a one-line class body immediately followed by another statement (such as
+  ``class Foo: ...`` on its own line) was incorrectly reported as a missing
+  branch with the sys.monitoring core, as described in `issue 2167`_. This is
+  now fixed.
+
 - Fix: the HTML report only rewrites a file's page when the file or its data
   has changed, but each page also links to the previous and next files. When
   the set of reported files changed, unchanged pages kept their old links. For
@@ -47,6 +52,7 @@ Unreleased
 - In an abundance of caution, prevent forged SQLite journal files from deleting
   files they shouldn't.
 
+.. _issue 2167: https://github.com/coveragepy/coveragepy/issues/2167
 .. _issue 2291: https://github.com/coveragepy/coveragepy/issues/2291
 .. _issue 2295: https://github.com/coveragepy/coveragepy/issues/2295
 
@@ -326,12 +332,6 @@ Version 7.15.1 — 2026-07-12
   <pull 2216_>`_, `2218 <pull 2218_>`_, `2220 <pull 2220_>`_, and `2221 <pull
   2221_>`_.
 
-- Fix: a one-line class body immediately followed by another statement (such as
-  ``class Foo: ...`` on its own line) was incorrectly reported as a missing
-  branch with the sys.monitoring core, which is the default on Python 3.14, as
-  described in `issue 2167`_. This is now fixed.
-
-.. _issue 2167: https://github.com/coveragepy/coveragepy/issues/2167
 .. _pull 2213: https://github.com/coveragepy/coveragepy/pull/2213
 .. _pull 2214: https://github.com/coveragepy/coveragepy/pull/2214
 .. _pull 2215: https://github.com/coveragepy/coveragepy/pull/2215
