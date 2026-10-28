@@ -25,8 +25,8 @@ Unreleased
 
 - Fix: a one-line class body immediately followed by another statement (such as
   ``class Foo: ...`` on its own line) was incorrectly reported as a missing
-  branch with the sys.monitoring core, as described in `issue 2167`_. This is
-  now fixed.
+  branch when using the sys.monitoring core, as described in `issue 2167`_.
+  This is now fixed.
 
 - Fix: the HTML report only rewrites a file's page when the file or its data
   has changed, but each page also links to the previous and next files. When
